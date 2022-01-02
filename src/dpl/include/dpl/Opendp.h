@@ -78,6 +78,7 @@ using odb::dbRow;
 using odb::dbSite;
 using odb::Point;
 using odb::Rect;
+using odb::dbITerm;
 
 struct Pixel;
 struct Group;
@@ -403,6 +404,9 @@ private:
   // Sum of ITerm hpwl's.
   int64_t hpwl(dbInst *inst);
   bool isSupply(dbNet *net) const;
+  // DP Improver 
+  int64_t hpwl_increment(dbInst *inst, int pt_x, bool mirror) const;
+  int64_t hpwl_incremental(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int pt_x, bool mirror) const;
 
   Logger *logger_;
   dbDatabase *db_;

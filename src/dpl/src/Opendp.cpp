@@ -43,6 +43,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <vector>
 
 #include "Graphics.h"
 #include "utl/Logger.h"
@@ -52,6 +53,7 @@ namespace dpl {
 
 using std::round;
 using std::string;
+using std::vector;
 
 using utl::DPL;
 
@@ -261,6 +263,146 @@ Opendp::reportLegalizationStats() const
 
 ////////////////////////////////////////////////////////////////
 
+/////////////////////// DP Improver ////////////////////////////
+
+// Computes HPWL change of a net based on the new horizontal location of the cell and
+// the flipping condition. 
+int64_t
+Opendp::hpwl_incremental(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int pt_x, bool mirror) const
+{
+  Rect netBox = getBox(net);
+  int64_t net_hpwl = netBox.dx() + netBox.dy();
+  Rect iterm_box;
+  iterm_box.mergeInit();
+  int cellPtX, cellPtY;
+  inst->getLocation(cellPtX, cellPtY);
+  int cellWidth = inst->getMaster()->getWidth();
+
+  for (int i = 0; i < iterms.size(); i++) {
+    dbITerm *iterm = iterms[i];
+    int x, y;
+    if (iterm->getAvgXY(&x, &y)) {
+      Rect iterm_rect(x, y, x, y);
+      iterm_box.merge(iterm_rect);
+    }
+    else {
+      // This clause is sort of worthless because getAvgXY prints
+      // a warning when it fails.
+      dbInst *inst = iterm->getInst();
+      dbBox *inst_box = inst->getBBox();
+      int center_x = (inst_box->xMin() + inst_box->xMax()) / 2;
+      int center_y = (inst_box->yMin() + inst_box->yMax()) / 2;
+      Rect iterm_rect(center_x, center_y, center_x, center_y);
+      iterm_box.merge(iterm_rect);
+    }
+  }
+
+  // Based on current location check the pin location in the netbox
+  bool isInside = netBox.inside(iterm_box);
+
+  // Calculate the new pin delta displacement
+  int mirror_x = 0;
+  if (mirror) {
+    mirror_x = 2 * cellPtX + cellWidth - iterm_box.xMin() - iterm_box.xMax();
+  }
+  
+  int delta_x = pt_x - cellPtX + mirror_x;
+  
+  // Considering there wont be any movement along the y axis
+  iterm_box.moveDelta(delta_x, 0);
+  bool isContain = netBox.contains(iterm_box);
+
+  // Pin term is inside the net box before and after movement.
+  if (isInside && isContain) {
+    return 0;
+  }
+  // Pin term is initially inside the net box but after movement is outside the netbox
+  if (isInside) {
+    netBox.merge(iterm_box);
+    int64_t new_hpwl = netBox.dx() + netBox.dy();
+    // return net_hpwl - new_hpwl;
+    return new_hpwl - net_hpwl;
+  }
+
+  // Re calculate the Net box with the updated iterm location
+  Rect new_net_box;
+  new_net_box.mergeInit();
+
+  for (dbITerm *iterm_ : net->getITerms()) {
+    int i = std::find(iterms.begin(), iterms.end(), iterm_) - iterms.begin();
+    if (i >= iterms.size()) {
+      int x, y;
+      if (iterm_->getAvgXY(&x, &y)) {
+        Rect iterm_rect_(x, y, x, y);
+        new_net_box.merge(iterm_rect_);
+      }
+      else {
+        // This clause is sort of worthless because getAvgXY prints
+        // a warning when it fails.
+        dbInst *inst = iterm_->getInst();
+        dbBox *inst_box = inst->getBBox();
+        int center_x = (inst_box->xMin() + inst_box->xMax()) / 2;
+        int center_y = (inst_box->yMin() + inst_box->yMax()) / 2;
+        Rect inst_center(center_x, center_y, center_x, center_y);
+        new_net_box.merge(inst_center);
+      }
+    }
+  }
+  new_net_box.merge(iterm_box);
+  for (dbBTerm *bterm : net->getBTerms()) {
+    for (dbBPin *bpin : bterm->getBPins()) {
+      dbPlacementStatus status = bpin->getPlacementStatus();
+      if (status.isPlaced()) {
+        Rect pin_bbox = bpin->getBBox();
+        int center_x = (pin_bbox.xMin() + pin_bbox.xMax()) / 2;
+        int center_y = (pin_bbox.yMin() + pin_bbox.yMax()) / 2;
+        Rect pin_center(center_x, center_y, center_x, center_y);
+        new_net_box.merge(pin_center);
+      }
+    }
+  }
+  int64_t new_hpwl = new_net_box.dx() + new_net_box.dy();
+  // return net_hpwl - new_hpwl;
+  return new_hpwl - net_hpwl;
+}
+
+// Compute HPWL change due to the horizontal movement of a cell and its orientation change
+int64_t
+Opendp::hpwl_increment(dbInst *inst, int pt_x, bool mirror) const
+{
+  int64_t delta = 0;
+  // get an array of all the nets connects to the cell without duplication using array of pins)
+  vector<dbNet *> nets;
+  vector<vector<dbITerm *>> iterms;
+
+  for (dbITerm *iterm : inst->getITerms()) {
+    if (iterm->getNet() != NULL) {
+      dbNet *net = iterm->getNet();
+
+      int i = std::find(nets.begin(), nets.end(), net) - nets.begin();
+
+      if (i >= nets.size()) {
+        nets.push_back(net);
+        vector<dbITerm *> newvector;
+        newvector.push_back(iterm);
+        iterms.push_back(newvector);
+      }
+      else {
+        iterms[i].push_back(iterm);
+      }
+    }
+  }
+
+  for (int i = 0; i < nets.size(); i++) {
+    dbNet *net = nets[i];
+    if (isSupply(net) == false) {
+      delta = delta + hpwl_incremental(inst, iterms[i], net, pt_x, mirror);
+    }
+  }
+  return delta;
+}
+
+////////////////////////////////////////////////////////////////
 void
 Opendp::findDisplacementStats()
 {

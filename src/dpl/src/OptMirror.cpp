@@ -147,18 +147,15 @@ Opendp::mirrorCandidates(vector<dbInst*> &mirror_candidates)
 {
   int mirror_count = 0;
   for (dbInst *inst : mirror_candidates) {
-    // Use hpwl of all nets connected to the instance terms
-    // before/after to determine incremental change to total hpwl.
-    int64_t hpwl_before = hpwl(inst);
-    dbOrientType orient = inst->getOrient();
-    dbOrientType orient_my = orientMirrorY(orient);
-    inst->setLocationOrient(orient_my);
-    int64_t hpwl_after = hpwl(inst);
-    if (hpwl_after > hpwl_before)
-      // Undo mirroring if hpwl is worse.
-      inst->setLocationOrient(orient);
-    else {
-      //printf("mirror %s\n", inst->getConstName());
+    int cellPtX = 0;
+    int cellPtY = 0;
+    inst->getLocation(cellPtX,cellPtY);
+    //logger_->report("Instance name: {:s} ", inst->getName());
+    int64_t delta_hpwl = hpwl_increment(inst, cellPtX, true);
+    if ( delta_hpwl <= 0) {
+      dbOrientType orient = inst->getOrient();
+      dbOrientType orient_my = orientMirrorY(orient);
+      inst->setLocationOrient(orient_my);
       mirror_count++;
     }
   }

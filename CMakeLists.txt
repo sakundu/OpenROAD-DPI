@@ -98,6 +98,7 @@ else()
   message(WARNING "Compiler ${CMAKE_CXX_COMPILER_ID} is not officially supported.")
 endif()
 
+set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -ggdb" )
 message(STATUS "System name: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
