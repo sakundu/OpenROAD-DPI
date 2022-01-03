@@ -32,6 +32,35 @@
 ## POSSIBILITY OF SUCH DAMAGE.
 #############################################################################
 
+sta::define_cmd_args "dp_improver" {[-swaprange swaprange|-shiftrange shiftrange|-iter iter]}
+
+proc dp_improver { args } {
+  sta::parse_key_args "dp_improver" args \
+    keys {-swaprange -shiftrange -iter} flags {}
+
+  if {[info exist keys(-swaprange)]} {
+    set swaprange $keys(-swaprange)
+  } else {
+    set swaprange 20
+  }
+
+  if {[info exist keys(-shiftrange)]} {
+    set shiftrange $keys(-shiftrange)
+  } else {
+    set shiftrange 50
+  }
+
+  if {[info exist keys(-iter)]} {
+    set iter $keys(-iter)
+  } else {
+    set iter 4
+  }
+
+  sta::check_argc_eq0 "dp_improver" $args
+
+  dpl::improver_cmd $swaprange $shiftrange $iter 
+}
+
 sta::define_cmd_args "detailed_placement" {[-max_displacement disp|{disp_x disp_y}]}
 
 proc detailed_placement { args } {

@@ -166,6 +166,28 @@ public:
   Point pt; // grid locataion
 };
 
+////////////////////// DP Improver ///////////////////////
+// Move class contains movement, delta of HPWL and flip.
+class move
+{
+public:
+  move(int64_t movementt, int64_t deltaa, bool flipp);
+  move();
+  int64_t movement, delta;
+  bool flip;
+};
+
+// dpRow class contains lower left Y and right most X coordinate.
+class dpRow
+{
+  public:
+    dpRow();
+    dpRow(dbRow *row, Rect core_);
+    dpRow(int x, int y);
+    int x_, y_;
+};
+//////////////////////////////////////////////////////////
+
 class Opendp
 {
 public:
@@ -221,6 +243,17 @@ public:
   int getSiteWidth() const { return site_width_; }
   int getRowCount() const { return row_count_; }
   int getRowSiteCount() const { return row_site_count_; }
+  //////////////////////// DP Improver ///////////////////////////
+  void swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> &id2index);
+  void SwapAndShift(int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_, 
+                    vector<dpRow *> &sortedRows, map<int,int> &id2index);
+  void updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows);
+  bool swapCellss(Cell *cell1, Cell *cell2);
+  dbOrientType orientMirrorY(dbOrientType orient);
+  bool checkSwap(int i, int j, vector<Cell *> row);
+  bool checkValid(int origincell, int swapcell, int shift, vector<Cell *> row);
+  void improver(int swaprange, int shiftrange, int iter);
+  ////////////////////////////////////////////////////////////////
 
 private:
   void importDb();
@@ -404,9 +437,19 @@ private:
   // Sum of ITerm hpwl's.
   int64_t hpwl(dbInst *inst);
   bool isSupply(dbNet *net) const;
-  // DP Improver 
+
+  //////////////////////// DP Improver ////////////////////////////
   int64_t hpwl_increment(dbInst *inst, int pt_x, bool mirror) const;
-  int64_t hpwl_incremental(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int pt_x, bool mirror) const;
+  int64_t hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, 
+                          dbNet *net, int pt_x, bool mirror) const;
+  void hpwl_increment(dbInst *inst, vector<move *> moves);
+  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<move *> moves);
+  void hpwl_increment(dbInst *inst, vector<move *> moves, vector<dbInst *> others, 
+                      vector<move *> movess);
+  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<move *> moves, 
+                      vector<vector<vector<dbITerm *>>> itermss, vector<dbInst *> others, 
+                      vector<move *> movess, int netCount);
+  ////////////////////////////////////////////////////////////////
 
   Logger *logger_;
   dbDatabase *db_;

@@ -99,6 +99,13 @@ detailed_placement_cmd(int max_displacment_x,
 }
 
 void
+improver_cmd(int swaprange, int shiftrange, int iter)
+{
+  dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->improver(swaprange, shiftrange, iter);
+}
+
+void
 report_legalization_stats()
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();

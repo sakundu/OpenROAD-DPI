@@ -51,9 +51,6 @@ using std::unordered_set;
 using odb::dbITerm;
 using odb::dbOrientType;
 
-static dbOrientType
-orientMirrorY(dbOrientType orient);
-
 NetBox::NetBox(dbNet *n) :
   net(n)
 {
@@ -163,8 +160,8 @@ Opendp::mirrorCandidates(vector<dbInst*> &mirror_candidates)
 }
 
 // apply mirror about Y axis to orient
-static dbOrientType
-orientMirrorY(dbOrientType orient)
+dbOrientType
+Opendp::orientMirrorY(dbOrientType orient)
 {
   switch (orient) {
   case dbOrientType::R0:

@@ -364,7 +364,26 @@ Opendp::paintPixel(Cell *cell, int grid_x, int grid_y)
     for (int y = grid_y; y < y_end; y++) {
       Pixel *pixel = gridPixel(x, y);
       if (pixel->cell) {
-        logger_->error(DPL, 13, "Cannot paint grid because it is already occupied.");
+        if(!pixel->is_valid || pixel->util == 0)
+        {
+	        pixel->group_=cell->group_;
+          pixel->cell = cell;
+          pixel->util = 1.0;
+          pixel->is_valid = true;
+        }
+        else
+        {
+          Pixel *tmpPixel = gridPixel(grid_x,grid_y);
+          Cell* tmpCell = tmpPixel->cell;
+          int tmpx = gridPaddedX(tmpCell);
+          int tmpy = gridY(tmpCell);
+          int tmpEx = gridPaddedEndX(tmpCell);
+          int tmpEy = gridEndY(tmpCell);
+          //int ttEy = divCeil(tmpCell->y_ + tmpCell->height_, row_height_);
+          logger_->report("\nPixel Details Grid X:{:d} Y:{:d} From Cell Grid X:{:d} Y:{:d} endX:{:d} endY:{:d} Cell:{:s} X:{:d} Y:{:d} H:{:d} row H:{:d}",grid_x, grid_y, tmpx, tmpy, tmpEx, tmpEy,tmpCell->db_inst_->getName(),tmpCell->x_,tmpCell->y_, tmpCell->height_,row_height_);
+          logger_->report("Dummy:{:f} Grid X:{:d} Y:{:d} XEND:{:d} YEND:{:d} and gridnum is {:d} and Name:{:s} X:{:d} Y:{:d} Pixel Cell:{:s} X:{:d} Y:{:d}", pixel->util, grid_x, grid_y, x_end, y_end, x*site_width_,cell->db_inst_->getName(),cell->x_,cell->y_,pixel->cell->db_inst_->getName(),pixel->cell->x_,pixel->cell->y_);
+          logger_->error(DPL, 13, "Cannot paint grid because it is already occupied.");
+        }
       }
       else {
         pixel->cell = cell;
