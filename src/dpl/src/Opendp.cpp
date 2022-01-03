@@ -1113,6 +1113,11 @@ Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<d
 void
 Opendp::improver(int swaprange, int shiftrange, int iter)
 {
+  importDb();
+  initGrid();
+  // Paint fixed cells.
+  setFixedGridCells();
+
   double hpwl_actual = hpwl();
   // SwapAndShift(40,5);
   std::chrono::time_point<std::chrono::system_clock> start, end;
