@@ -321,6 +321,7 @@ Opendp::GenerateAP()
         odb::dbSet<odb::dbBox> pinshapes = mpin->getGeometry();
         odb::Rect pinbox = mpin->getBBox();
         Pin_RPA newPin;
+        newPin.mpin = mpin;
         newPin.x_min = pinbox.xMin();
         for ( odb::dbBox *pinshape: pinshapes) {
           odb::dbTechLayer* pinLayer = pinshape->getTechLayer();
@@ -397,6 +398,19 @@ Opendp::detailedPlacement(int max_displacement_x,
   reportImportWarnings();
   hpwl_before_ = hpwl();
   detailedPlacement();
+  GenerateAP();
+  for(Cell_RPA cell: cell_rpas_)
+  {
+    logger_->report("Cell name : {:s}", cell.db_inst_->getName());
+    for(Pin_RPA pin: cell.pins)
+    {
+      logger_->report("Pin name : {:s}, PA count : {:u}", pin.mpin->getMTerm()->getName(), pin.xAPs.size());
+      for(AccessP ap: pin.xAPs)
+      {
+        logger_->report("Access point x : {:u}, y : {:u}", ap.x, ap.y);
+      }
+    }
+  }
   // Save displacement stats before updating instance DB locations.
   findDisplacementStats();
   updateDbInstLocations();
