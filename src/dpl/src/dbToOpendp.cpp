@@ -39,7 +39,6 @@
 #include <limits>
 
 #include "utl/Logger.h"
-#include "ord/OpenRoad.hh"
 
 namespace dpl {
 
@@ -70,7 +69,7 @@ void
 Opendp::importDb()
 {
   block_ = db_->getChip()->getBlock();
-  core_ = ord::getCore(block_);
+  block_->getCoreArea(core_);
 
   importClear();
   examineRows();
@@ -184,6 +183,7 @@ Opendp::makeCells()
 {
   auto db_insts = block_->getInsts();
   cells_.reserve(db_insts.size());
+  cell_rpas_.reserve(db_insts.size());
   for (auto db_inst : db_insts) {
     dbMaster *master = db_inst->getMaster();
     if (master->isCoreAutoPlaceable()) {
@@ -192,6 +192,11 @@ Opendp::makeCells()
       cell.db_inst_ = db_inst;
       db_inst_map_[db_inst] = &cell;
 
+      //FOR OUR RPA
+      cell_rpas_.push_back(Cell_RPA());
+      Cell_RPA &cell1 = cell_rpas_.back();
+      cell1.db_inst_ = db_inst;
+
       Rect bbox = getBbox(db_inst);
       cell.width_ = bbox.dx();
       cell.height_ = bbox.dy();
@@ -199,6 +204,14 @@ Opendp::makeCells()
       cell.y_ = bbox.yMin();
       cell.orient_ = db_inst->getOrient();
       cell.is_placed_ = isFixed(&cell);
+
+      //FOR OUR RPA
+      cell1.width_ = bbox.dx();
+      cell1.height_ = bbox.dy();
+      cell1.x_ = bbox.xMin();
+      cell1.y_ = bbox.yMin();
+      cell1.orient_ = db_inst->getOrient();
+      cell1.is_placed_ = isFixed(&cell);
 
       Macro &macro = db_master_map_[master];
       if (macro.is_multi_row_)
