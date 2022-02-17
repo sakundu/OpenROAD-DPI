@@ -217,6 +217,8 @@ Below is a list of the available tools/modules included in the OpenROAD app.
 - [GUI](./src/gui/README.md)
        
 ### new Update
+We have done all our update in DPL.
+
 DP Improver Effect of Shift Range, Swap Range, and iteration count on the wire length
 
 Shift Range: It is the range(unit: site) for a particular cell that determines how far it can shift from its current position.
