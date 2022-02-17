@@ -121,58 +121,6 @@ struct Cell
   Rect *region_;  // group rect
 };
 
-struct Cell
-{
-  Cell();
-  const char *name() const;
-  bool inGroup() const { return group_ != nullptr; }
-  int64_t area() const;
-
-  dbInst *db_inst_;
-  int x_, y_;  // lower left wrt core DBU
-  dbOrientType orient_;
-  int width_, height_;  // DBU
-  bool is_placed_;
-  bool hold_;
-  Group *group_;
-  Rect *region_;  // group rect
-};
-
-//access points
-struct AccessP
-{
-  AccessP();
-
-  int x, y;
-};
-
-struct Pin_RPA
-{
-  Pin_RPA();
-
-  int x_min;
-  vector<dpl::AccessP> xAPs;
-  vector<dpl::AccessP> yAPs;
-};
-
-struct Cell_RPA
-{
-  Cell_RPA();
-  const char *name_RPA() const;
-  bool inGroup_RPA() const { return group_ != nullptr; }
-  int64_t area_RPA() const;
-
-  dbInst *db_inst_;
-  int x_, y_;  // lower left wrt core DBU
-  dbOrientType orient_;
-  int width_, height_;  // DBU
-  bool is_placed_;
-  bool hold_;
-  Group *group_;
-  Rect *region_;  // group rect
-  vector<dpl::Pin_RPA> pins;
-};
-  
 struct Group
 {
   Group();
@@ -259,7 +207,6 @@ public:
   // max_displacment is in sites. use zero for defaults.
   void detailedPlacement(int max_displacement_x,
                          int max_displacement_y);
-  void GenerateAP();
   void reportLegalizationStats() const;
   void setPaddingGlobal(int left, int right);
   void setPadding(dbMaster *inst,
@@ -513,7 +460,6 @@ private:
   MasterPaddingMap master_padding_map_;
 
   vector<Cell> cells_;
-  vector<Cell_RPA> cell_rpas_;
   vector<Group> groups_;
 
   map<const dbMaster *, Macro> db_master_map_;

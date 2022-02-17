@@ -104,15 +104,6 @@ comparator3(const dpRow *lhs, const dpRow *rhs);
 
 static bool
 comparator2(const Cell *lhs, const Cell *rhs);
-  
-static bool
-comparator6(const Pin_RPA lhs, const Pin_RPA rhs);
-
-static bool
-comparator4(const AccessP lhs, const AccessP rhs);
-
-static bool
-comparator5(const AccessP lhs, const AccessP rhs);
 
 move::move(int64_t movementt, int64_t deltaa, bool flipp) :
   movement(movementt),
@@ -151,55 +142,8 @@ dpRow::dpRow(int x, int y) :
   y_(y)
 {
 }
-  
-Cell_RPA::Cell_RPA() :
-  db_inst_(nullptr),
-  x_(0),
-  y_(0),
-  width_(0),
-  height_(0),
-  is_placed_(false),
-  hold_(false),
-  group_(nullptr),
-  region_(nullptr)
-{
-}
-
-const char *
-Cell_RPA::name_RPA() const
-{
-  return db_inst_->getConstName();
-}
-
-int64_t
-Cell_RPA::area_RPA() const
-{
-  dbMaster *master = db_inst_->getMaster();
-  return master->getWidth() * master->getHeight();
-}
-
-Pin_RPA::Pin_RPA()
-{
-}
-
-AccessP::AccessP()
-{
-}
-
 ////////////////////////////////////////////////////////////////
 
-static bool comparator6(const Pin_RPA lhs, const Pin_RPA rhs) {
-   return lhs.x_min < rhs.x_min;
-}
-
-static bool comparator4(const AccessP lhs, const AccessP rhs) {
-   return lhs.x < rhs.x;
-}
-
-static bool comparator5(const AccessP lhs, const AccessP rhs) {
-   return lhs.y < rhs.y;
-}
-  
 bool
 Opendp::isFixed(const Cell *cell) const
 {
@@ -256,7 +200,7 @@ void
 Opendp::initBlock()
 {
   block_ = db_->getChip()->getBlock();
-  block_->getCoreArea(core_);
+  core_ = ord::getCore(block_);
 }
 
 void
@@ -303,82 +247,6 @@ Opendp::setDebug(bool displacement,
   }
 }
 
-/*
-Cell_RPA -> inst
-         -> pins
-pins -> shape -> APS
-*/
-void
-Opendp::GenerateAP()
-{
-  for(Cell_RPA cell: cell_rpas_)
-  {
-    odb::dbMaster *master = cell.db_inst_->getMaster();
-    for ( dbMTerm *mterm: master->getMTerms()) {
-      if ( mterm->getSigType().isSupply())
-        continue;
-      for ( dbMPin *mpin: mterm->getMPins()) {
-        odb::dbSet<odb::dbBox> pinshapes = mpin->getGeometry();
-        odb::Rect pinbox = mpin->getBBox();
-        Pin_RPA newPin;
-        newPin.mpin = mpin;
-        newPin.x_min = pinbox.xMin();
-        for ( odb::dbBox *pinshape: pinshapes) {
-          odb::dbTechLayer* pinLayer = pinshape->getTechLayer();
-          //string layerName = pinLayer->getName();
-          odb::dbTechLayerType lType = pinLayer->getType();
-          //int nx = 0, ny = 0;
-          if ( lType == odb::dbTechLayerType::Value::ROUTING) {
-            odb::dbTrackGrid *tmpGrid = block_->findTrackGrid(pinLayer);
-            //nx = tmpGrid->getNumGridPatternsX();
-            //std::map<odb::dbTechLayerType,vector<pair<int,int>>> APsOFLayers;
-            vector<int> xgrid, ygrid;
-            //vector<pair<int,int>> APs;
-            tmpGrid->getGridX(xgrid);
-            tmpGrid->getGridY(ygrid);
-            //check if the shape is vertical or horizontal
-            if((pinshape->xMax() - pinshape->xMax()) < (pinshape->yMax() - pinshape->yMax()))
-            {
-              for(int y: ygrid)
-              {
-                int x = (pinshape->xMax() - pinshape->xMax())/2;
-                AccessP ap;
-                ap.x = x;
-                ap.y = y;
-                newPin.xAPs.push_back(ap);
-                newPin.yAPs.push_back(ap);
-              }
-            }
-            else
-            {
-              for(int x: xgrid)
-              {
-                int y = (pinshape->yMax() - pinshape->yMax())/2;
-                AccessP ap;
-                ap.x = x;
-                ap.y = y;
-                newPin.xAPs.push_back(ap);
-                newPin.yAPs.push_back(ap);
-              }
-            }
-            //ny = tmpGrid->getNumGridPatternsY();
-            //odb::dbTechLayerDir tmpDirection = pinLayer->getDirection();
-            //nx = xgrid.size();
-            //ny = ygrid.size();
-          }
-          //logger_->report("Layer Name: {:s} X:{:d} Y:{:d}",layerName, nx, ny);
-        }
-        //After adding all the APS from each shape, sort them
-        sort(newPin.xAPs.begin(), newPin.xAPs.end(), &comparator4);
-        sort(newPin.yAPs.begin(), newPin.yAPs.end(), &comparator5);
-        cell.pins.push_back(newPin);
-      }
-    }
-    //after adding all the pins
-    sort(cell.pins.begin(), cell.pins.end(), &comparator6);
-  }
-}
-
 void
 Opendp::detailedPlacement(int max_displacement_x,
                           int max_displacement_y)
@@ -398,19 +266,6 @@ Opendp::detailedPlacement(int max_displacement_x,
   reportImportWarnings();
   hpwl_before_ = hpwl();
   detailedPlacement();
-  GenerateAP();
-  for(Cell_RPA cell: cell_rpas_)
-  {
-    logger_->report("Cell name : {:s}", cell.db_inst_->getName());
-    for(Pin_RPA pin: cell.pins)
-    {
-      logger_->report("Pin name : {:s}, PA count : {:u}", pin.mpin->getMTerm()->getName(), pin.xAPs.size());
-      for(AccessP ap: pin.xAPs)
-      {
-        logger_->report("Access point x : {:u}, y : {:u}", ap.x, ap.y);
-      }
-    }
-  }
   // Save displacement stats before updating instance DB locations.
   findDisplacementStats();
   updateDbInstLocations();
