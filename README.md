@@ -218,12 +218,18 @@ Below is a list of the available tools/modules included in the OpenROAD app.
        
 ### new Update
 We have done all our update in DPL.
+       
+We have added the dp_improver tcl command which can be used on detailed placed data set to improve the HPWL of the design. This performs cell swapping, shifting, and flipping operations. 
 
-DP Improver Effect of Shift Range, Swap Range, and iteration count on the wire length
+Here is the usage of the command: (default value we have added for swaprange 20, shiftrage 50, iter to 4).
+
+dp_improver -swapraneg <> -shiftrange<> -iter <> 
 
 Shift Range: It is the range(unit: site) for a particular cell that determines how far it can shift from its current position.
 
-Swap Range: It is the range(unit: site) for a particular cell that determines which other cells from the same row can be considered as a potential swapping candidate with this cell. 
+Swap Range: It is the range(unit: site) for a particular cell that determines which other cells from the same row can be considered as a potential swapping candidate with this cell.
+       
+iter: It defines how many times are we calling the method.
 
 [Link](https://docs.google.com/spreadsheets/d/1ePHP4KUA2jJjhvFFZwHMxaeseGB6a6EhbMAiEv7fau4/edit#gid=1543630611) to the data used to generate the plots below. (Here DPI stands for the data point collected after using our DP Improver. WO stands for without)
 
