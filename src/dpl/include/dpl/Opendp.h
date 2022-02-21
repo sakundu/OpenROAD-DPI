@@ -121,29 +121,13 @@ struct Cell
   Rect *region_;  // group rect
 };
 
-struct Cell
-{
-  Cell();
-  const char *name() const;
-  bool inGroup() const { return group_ != nullptr; }
-  int64_t area() const;
-
-  dbInst *db_inst_;
-  int x_, y_;  // lower left wrt core DBU
-  dbOrientType orient_;
-  int width_, height_;  // DBU
-  bool is_placed_;
-  bool hold_;
-  Group *group_;
-  Rect *region_;  // group rect
-};
-
 //access points
 struct AccessP
 {
   AccessP();
 
   int x, y;
+  odb::dbTechLayer* layer;
 };
 
 struct Pin_RPA
@@ -151,6 +135,7 @@ struct Pin_RPA
   Pin_RPA();
 
   int x_min;
+  dbMPin* mpin;
   vector<dpl::AccessP> xAPs;
   vector<dpl::AccessP> yAPs;
 };
@@ -171,6 +156,7 @@ struct Cell_RPA
   Group *group_;
   Rect *region_;  // group rect
   vector<dpl::Pin_RPA> pins;
+  double rpa;
 };
   
 struct Group
@@ -260,6 +246,7 @@ public:
   void detailedPlacement(int max_displacement_x,
                          int max_displacement_y);
   void GenerateAP();
+  void RPAGenerate();
   void reportLegalizationStats() const;
   void setPaddingGlobal(int left, int right);
   void setPadding(dbMaster *inst,
@@ -306,6 +293,7 @@ public:
   bool checkSwap(int i, int j, vector<Cell *> row);
   bool checkValid(int origincell, int swapcell, int shift, vector<Cell *> row);
   void improver(int swaprange, int shiftrange, int iter);
+  void updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, vector<dpRow *> &sortedRows);
   ////////////////////////////////////////////////////////////////
 
 private:
