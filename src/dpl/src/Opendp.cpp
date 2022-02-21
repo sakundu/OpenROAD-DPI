@@ -46,6 +46,7 @@
 #include <vector>
 
 #include "Graphics.h"
+#include "dbTransform.h"
 #include "utl/Logger.h"
 #include "ord/OpenRoad.hh"  // closestPtInRect
 
@@ -57,6 +58,7 @@ using std::vector;
 
 using utl::DPL;
 
+using odb::Point;
 using odb::dbBox;
 using odb::dbBPin;
 using odb::dbBTerm;
@@ -68,6 +70,7 @@ using odb::dbNet;
 using odb::dbPlacementStatus;
 using odb::Rect;
 using odb::dbSigType;
+using odb::dbTransform;
 
 Cell::Cell() :
   db_inst_(nullptr),
@@ -161,7 +164,8 @@ Cell_RPA::Cell_RPA() :
   is_placed_(false),
   hold_(false),
   group_(nullptr),
-  region_(nullptr)
+  region_(nullptr),
+  rpa(0)
 {
 }
 
@@ -303,16 +307,140 @@ Opendp::setDebug(bool displacement,
   }
 }
 
+void
+Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, vector<dpRow *> &sortedRows)
+{
+  //sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
+  int cellCount = (int)tmpCells_.size();
+  int i = 0;
+  int rowSize = sortedRows.size();
+  
+  vector<Cell_RPA *> row;
+  int j = 0;
+  int db_row_miny = sortedRows[j]->y_;
+  int db_row_maxx = sortedRows[j]->x_;
+  j++;
+  
+  i = 0;
+  Cell_RPA *temp = &tmpCells_[i];
+  i++;
+  
+  while (i <= cellCount && j <= rowSize) {
+    if (db_row_miny != temp->y_ || i == cellCount) {
+      if(db_row_miny == temp->y_ && i == cellCount)
+      {
+        row.push_back(temp);
+      }
+      else if(db_row_miny != temp->y_ && i == cellCount)
+      {
+        row.clear();
+        row.push_back(temp);
+        all.push_back(row);
+        break;
+      }
+      
+      auto compareLambda1 = [](const Cell_RPA *lhs, const Cell_RPA *rhs)
+      {
+        return lhs->x_ < rhs->x_;
+      };
+
+      sort(row.begin(), row.end(), compareLambda1);
+      vector<Cell_RPA *> tmprow;
+      int rowLength = row.size();
+      int k = 0;
+
+      while (k <= rowLength) {
+        if (k < rowLength && row[k]->x_ < db_row_maxx) {
+          tmprow.push_back(row[k]);
+          k++;
+        }
+        else {
+          all.push_back(tmprow);
+          tmprow.clear();
+
+          if (k == rowLength || j == rowSize) {
+            // logger_->report("Test that it breaks from row");
+            break;
+          }
+          db_row_miny = sortedRows[j]->y_;
+          db_row_maxx = sortedRows[j]->x_;
+          j++;
+        }
+      }
+
+      row.clear();
+      while (db_row_miny != temp->y_ && i < cellCount && j < rowSize) {
+        while (db_row_miny < temp->y_) {
+          db_row_miny = sortedRows[j]->y_;
+          db_row_maxx = sortedRows[j]->x_;
+          j++;
+        }
+        while (temp->y_ < db_row_miny) {
+          dbMaster* tmpMaster = temp->db_inst_->getMaster();
+          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",tmpMaster->getName());
+          temp = &tmpCells_[i];
+          i++;
+        }
+      }
+      if (i == cellCount) {
+        break;
+      }
+    
+    }
+    row.push_back(temp);
+    temp = &tmpCells_[i];
+    i++;
+    
+  }
+  while (j == rowSize && i < cellCount) {
+    temp = &tmpCells_[i];
+    dbMaster *tmpMaster = temp->db_inst_->getMaster();
+    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}", 
+                    tmpMaster->getName(), temp->x_, temp->y_);
+    i++;
+  }
+  // logger_->report("Update Row is Finished");
+}
+
 /*
 Cell_RPA -> inst
          -> pins
 pins -> shape -> APS
 */
+
+/*
+      // Inst location
+      int px;
+      int py;
+      tmpCell.db_inst_->getOrigin(px, py);
+      //tmpCell.db_inst_->getLocation(px, py);
+      dbOrientType orient = tmpCell.db_inst_->getOrient();
+      Point origin = Point(px, py);
+      odb::dbTransform inst_xfm(orient, origin);
+      // Get pin location wrt the cell and pass it to inst_xfm.apply() 
+      // Let pin x1 (xmin of dbBox) ,y1 (ymin of dbBox) wrt cell
+      Point p1 = Point(x1,y1);
+      inst_xfm.apply(p1);
+      // Now p1 is wrt design.
+*/
 void
 Opendp::GenerateAP()
 {
-  for(Cell_RPA cell: cell_rpas_)
+  for(Cell_RPA &cell: cell_rpas_)
   {
+    int px;
+    int py;
+    cell.db_inst_->getOrigin(px, py);
+    //tmpCell.db_inst_->getLocation(px, py);
+    dbOrientType orient = cell.db_inst_->getOrient();
+    Point origin = Point(px, py);
+    dbTransform inst_xfm(orient, origin);
+    // Get pin location wrt the cell and pass it to inst_xfm.apply() 
+    // Let pin x1 (xmin of dbBox) ,y1 (ymin of dbBox) wrt cell
+    //logger_->report("dbname : {:s} before x is {:d}, y is {:d} core_x is {:d}", cell.db_inst_->getName(), origin.x(), origin.y(), core_.xMin());
+    //inst_xfm.apply(origin);
+    //logger_->report("dbname : {:s} after x is {:d}, y is {:d}", cell.db_inst_->getName(), origin.x(), origin.y());
+
     odb::dbMaster *master = cell.db_inst_->getMaster();
     for ( dbMTerm *mterm: master->getMTerms()) {
       if ( mterm->getSigType().isSupply())
@@ -320,15 +448,20 @@ Opendp::GenerateAP()
       for ( dbMPin *mpin: mterm->getMPins()) {
         odb::dbSet<odb::dbBox> pinshapes = mpin->getGeometry();
         odb::Rect pinbox = mpin->getBBox();
+        inst_xfm.apply(pinbox);
         Pin_RPA newPin;
         newPin.mpin = mpin;
         newPin.x_min = pinbox.xMin();
         for ( odb::dbBox *pinshape: pinshapes) {
+          Rect shapeBox;
+          pinshape->getBox(shapeBox);
+          inst_xfm.apply(shapeBox);
           odb::dbTechLayer* pinLayer = pinshape->getTechLayer();
           //string layerName = pinLayer->getName();
           odb::dbTechLayerType lType = pinLayer->getType();
           //int nx = 0, ny = 0;
           if ( lType == odb::dbTechLayerType::Value::ROUTING) {
+            //logger_->report("add shape, xmax: {:d}", pinshape->xMax());
             odb::dbTrackGrid *tmpGrid = block_->findTrackGrid(pinLayer);
             //nx = tmpGrid->getNumGridPatternsX();
             //std::map<odb::dbTechLayerType,vector<pair<int,int>>> APsOFLayers;
@@ -337,29 +470,55 @@ Opendp::GenerateAP()
             tmpGrid->getGridX(xgrid);
             tmpGrid->getGridY(ygrid);
             //check if the shape is vertical or horizontal
-            if((pinshape->xMax() - pinshape->xMax()) < (pinshape->yMax() - pinshape->yMax()))
+            //logger_->report("x grid size : {:d}", xgrid.size());
+            if((shapeBox.xMax() - shapeBox.xMin()) <= (shapeBox.yMax() - shapeBox.yMin()))
             {
-              for(int y: ygrid)
+              //if(ygrid[ygrid.size()-1] != 124110)
+              //logger_->report("x : {:d}, y:{:d}, xgap: {:d}, ygap: {:d}", xgrid[0], ygrid[0], xgrid[1]-xgrid[0], ygrid[1]-ygrid[0]);
+              int top = shapeBox.yMax();
+              int bot = shapeBox.yMin();
+              int ygap = ygrid[1]-ygrid[0];
+              //if((top - bot) < site_width_)
+                //logger_->report("noooooooooooooooo it is {:d}", top - bot);
+              int count = (top-ygrid[0])/ygap;
+              int actualTop = (count * ygap) + ygrid[0];
+              for(int i = actualTop; i >= bot; i -= ygap)
               {
-                int x = (pinshape->xMax() - pinshape->xMax())/2;
+                //logger_->report("y : {:d}", y);
+                int x = (shapeBox.xMax() + shapeBox.xMin())/2;
                 AccessP ap;
                 ap.x = x;
-                ap.y = y;
+                ap.y = i;
+                ap.layer = pinLayer;
                 newPin.xAPs.push_back(ap);
                 newPin.yAPs.push_back(ap);
               }
             }
             else
             {
-              for(int x: xgrid)
+                //logger_->report("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy : {:d}", ygrid[ygrid.size()-1]);
+              int right = shapeBox.xMax();
+              int left = shapeBox.xMin();
+              int xgap = xgrid[1]-xgrid[0];
+              //if((right - left) < site_width_)
+                //logger_->report("noooooooooooooooo it is {:d}", right - left);
+              int count = (right-xgrid[0])/xgap;
+              int actualRight = (count * xgap) + xgrid[0];
+              for(int i = actualRight; i >= left; i -= xgap)
               {
-                int y = (pinshape->yMax() - pinshape->yMax())/2;
+                //logger_->report("x : {:d}", x);
+                int y = (shapeBox.yMax() + shapeBox.yMin())/2;
                 AccessP ap;
-                ap.x = x;
+                ap.x = i;
                 ap.y = y;
+                ap.layer = pinLayer;
                 newPin.xAPs.push_back(ap);
                 newPin.yAPs.push_back(ap);
               }
+            }
+            if(cell.db_inst_->getName() == "_33512_")
+            {
+              logger_->report("cell name: {:s}, pin name is: {:s}, xmax is {:d}, xmin is{:d}, ymax is {:d}, ymin is {:d}", cell.db_inst_->getName(), mpin->getMTerm()->getName(), shapeBox.xMax(), shapeBox.xMin(), shapeBox.yMax(), shapeBox.yMin());
             }
             //ny = tmpGrid->getNumGridPatternsY();
             //odb::dbTechLayerDir tmpDirection = pinLayer->getDirection();
@@ -371,20 +530,176 @@ Opendp::GenerateAP()
         //After adding all the APS from each shape, sort them
         sort(newPin.xAPs.begin(), newPin.xAPs.end(), &comparator4);
         sort(newPin.yAPs.begin(), newPin.yAPs.end(), &comparator5);
+        //logger_->report("add pin");
         cell.pins.push_back(newPin);
       }
     }
     //after adding all the pins
+    /*
+    for(Pin_RPA pin: cell.pins)
+    {
+      logger_->report("pin123455667 {:s}", pin.mpin->getMTerm()->getName());
+      for(AccessP ap: pin.xAPs)
+        logger_->report("ap x {:d}, y: {:d}", ap.x, ap.y);
+    }*/
     sort(cell.pins.begin(), cell.pins.end(), &comparator6);
   }
+}
+
+//default dint is 2000
+void
+Opendp::RPAGenerate()
+{
+  //cell_rpas_;
+  vector<vector<Cell_RPA*>> cell_rpas;
+
+  auto comparatorLambda2 = [] (const Cell_RPA lhs, const Cell_RPA rhs)
+  {
+    return lhs.y_ < rhs.y_;
+  };
+
+  sort(cell_rpas_.begin(), cell_rpas_.end(), comparatorLambda2);
+  
+  odb::dbSet<dbRow> rows = block_->getRows();
+  vector<dpRow *> sortedRows;
+  int maxRowY = INT_MIN;
+  int minRowY = INT_MAX;
+  
+  for (dbRow *row : rows) {
+    Rect rowBox;
+    row->getBBox(rowBox);
+    int y_ = rowBox.yMin();
+    int x_ = rowBox.xMax();
+    x_ -= core_.xMin();
+    y_ -= core_.yMin();
+    if (y_ > maxRowY)
+      maxRowY = y_;
+    if (y_ < minRowY)
+      minRowY = y_;
+    dpRow *tmprow = new dpRow(x_, y_);
+    sortedRows.push_back(tmprow);
+  }
+
+  sort(sortedRows.begin(), sortedRows.end(), &comparator3);
+  updateRow(cell_rpas,cell_rpas_, sortedRows);
+
+  for (int i = 0; i < cell_rpas.size(); i++) {
+    for (int j = 0; j < cell_rpas[i].size(); j++) {
+      for(int k = 0; k < cell_rpas[i][j]->pins.size(); k ++)
+      {
+        double xPinRPA = cell_rpas[i][j]->pins[k].xAPs.size();
+        double yPinRPA = cell_rpas[i][j]->pins[k].yAPs.size();
+        if((xPinRPA == 0) & (yPinRPA == 0))
+        {
+          cell_rpas[i][j]->rpa = std::min(cell_rpas[i][j]->rpa, -2.0);
+        }
+        for(AccessP APmain : cell_rpas[i][j]->pins[k].xAPs)
+        {
+          for(int l = 1; l < 4; l++)
+          {
+            //check left neighbors
+            if((k-l) < 0)
+            {
+              if((j-1) >= 0)
+              {
+                int size = cell_rpas[i][j-1]->pins.size();
+                double rpaTrack = 0;
+                if((size+(k-l)) >= 0)
+                {
+                  for(AccessP APneib : cell_rpas[i][j-1]->pins[size+(k-l)].xAPs)
+                  {
+                    if(((APmain.x - APneib.x) <= 2000) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
+                    {
+                      rpaTrack += 1;
+                    }
+                  }
+                  if(cell_rpas[i][j-1]->pins[size+(k-l)].xAPs.size() != 0)
+                  {
+                    double upa = rpaTrack/cell_rpas[i][j-1]->pins[size+(k-l)].xAPs.size();
+                    xPinRPA = xPinRPA - upa;
+                  }
+                }
+              }
+            }
+            //neighbor is inside main cell
+            else
+            {
+              double rpaTrack = 0;
+              for(AccessP APneib : cell_rpas[i][j]->pins[k-l].xAPs)
+              {
+                if(((APmain.x - APneib.x) <= 2000) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
+                {
+                  rpaTrack += 1;
+                }
+              }
+              if(cell_rpas[i][j]->pins[k-l].xAPs.size() != 0)
+              {
+                double upa = rpaTrack/cell_rpas[i][j]->pins[k-l].xAPs.size();
+                xPinRPA = xPinRPA - upa;
+              }
+            }
+            //check right nerghbors
+            //right neighbor is not in main cell
+            if((k+l) >= cell_rpas[i][j]->pins.size())
+            {
+              if((j+1) < cell_rpas[i].size())
+              {
+                //int size = cell_rpas[i][j+1]->pins.size();
+                double rpaTrack = 0;
+                int index = k+l-cell_rpas[i][j]->pins.size();
+                if(index < cell_rpas[i][j+1]->pins.size())
+                {
+                  for(AccessP APneib : cell_rpas[i][j+1]->pins[index].xAPs)
+                  {
+                    if(((APmain.x - APneib.x) <= 2000) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
+                    {
+                      rpaTrack += 1;
+                    }
+                  }
+                  if(cell_rpas[i][j+1]->pins[index].xAPs.size() != 0)
+                  {
+                    double upa = rpaTrack/cell_rpas[i][j+1]->pins[index].xAPs.size();
+                    xPinRPA = xPinRPA - upa;
+                  }
+                }
+              }
+            }
+            //neighbor is inside main cell
+            else
+            {
+              double rpaTrack = 0;
+              for(AccessP APneib : cell_rpas[i][j]->pins[k+l].xAPs)
+              {
+                if(((APmain.x - APneib.x) <= 2000) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
+                {
+                  rpaTrack += 1;
+                }
+              }
+              if(cell_rpas[i][j]->pins[k+l].xAPs.size() != 0)
+              {
+                double upa = rpaTrack/cell_rpas[i][j]->pins[k+l].xAPs.size();
+                xPinRPA = xPinRPA - upa;
+              }
+            }
+          }
+        }
+        xPinRPA -= 1;
+        yPinRPA -= 1;
+        double minPinRPA = xPinRPA < yPinRPA?xPinRPA:yPinRPA;
+        cell_rpas[i][j]->rpa = cell_rpas[i][j]->rpa < minPinRPA?cell_rpas[i][j]->rpa:minPinRPA ;
+      }
+    }
+  }
+
 }
 
 void
 Opendp::detailedPlacement(int max_displacement_x,
                           int max_displacement_y)
 {
+  //int dbUnit = block_->getDefUnits();
   importDb();
-
+  //float dbUnit = db_->getChip()->getBlock()->getDefUnits();
   if (max_displacement_x == 0 || max_displacement_y == 0) {
     // defaults
     max_displacement_x_ = 500;
@@ -398,22 +713,34 @@ Opendp::detailedPlacement(int max_displacement_x,
   reportImportWarnings();
   hpwl_before_ = hpwl();
   detailedPlacement();
-  GenerateAP();
-  for(Cell_RPA cell: cell_rpas_)
-  {
-    logger_->report("Cell name : {:s}", cell.db_inst_->getName());
-    for(Pin_RPA pin: cell.pins)
-    {
-      logger_->report("Pin name : {:s}, PA count : {:u}", pin.mpin->getMTerm()->getName(), pin.xAPs.size());
-      for(AccessP ap: pin.xAPs)
-      {
-        logger_->report("Access point x : {:u}, y : {:u}", ap.x, ap.y);
-      }
-    }
-  }
   // Save displacement stats before updating instance DB locations.
   findDisplacementStats();
   updateDbInstLocations();
+
+  GenerateAP();
+  RPAGenerate();
+  
+  //char s1 = '{', s2 = '}';
+  
+  for(Cell_RPA cell: cell_rpas_)
+  {
+    //if(cell.db_inst_->getName() == "_33512_")
+    //{
+      logger_->report("Cell name : {:s}, pin count : {:d}, rpa value: {:f}", cell.db_inst_->getName(), cell.pins.size(), cell.rpa);
+      for(Pin_RPA pin: cell.pins)
+      {
+        logger_->report("Pin name : {:s}, PA count : {:d}", pin.mpin->getMTerm()->getName(), pin.xAPs.size());
+        /*
+        for(AccessP ap: pin.xAPs)
+        {
+          float x = ap.x/dbUnit;
+          float y = ap.y/dbUnit;
+          //logger_->report("Access point x : {:d}, y : {:d}", ap.x, ap.y);
+          logger_->report("createMarker -bbox {:c}{:f} {:f} {:f} {:f}{:c}",s1,x,y,x,y,s2);
+        }*/
+      }
+    }
+  //}
 }
 
 void
