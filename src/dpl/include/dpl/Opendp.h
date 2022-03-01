@@ -83,6 +83,10 @@ using odb::dbITerm;
 struct Pixel;
 struct Group;
 class Graphics;
+struct Pin_RPA;
+struct AccessPoint;
+struct Cell_RPA;
+class Move;
 
 using Grid = Pixel *;
 using dbMasterSeq = vector<dbMaster *>;
@@ -122,9 +126,9 @@ struct Cell
 };
 
 //access points
-struct AccessP
+struct AccessPoint
 {
-  AccessP();
+  AccessPoint();
 
   int x, y;
   odb::dbTechLayer* layer;
@@ -136,8 +140,8 @@ struct Pin_RPA
 
   int x_min;
   dbMPin* mpin;
-  vector<dpl::AccessP> xAPs;
-  vector<dpl::AccessP> yAPs;
+  vector<dpl::AccessPoint> xAPs;
+  vector<dpl::AccessPoint> yAPs;
 };
 
 struct Cell_RPA
@@ -205,13 +209,13 @@ public:
 };
 
 ////////////////////// DP Improver ///////////////////////
-// Move class contains movement, delta of HPWL and flip.
-class move
+// Move class contains Movement, delta of HPWL and flip.
+class Move
 {
 public:
-  move(int64_t movementt, int64_t deltaa, bool flipp);
-  move();
-  int64_t movement, delta;
+  Move(int64_t Movementt, int64_t deltaa, bool flipp);
+  Move();
+  int64_t Movement, delta;
   bool flip;
 };
 
@@ -246,7 +250,7 @@ public:
   void detailedPlacement(int max_displacement_x,
                          int max_displacement_y);
   void GenerateAP();
-  void RPAGenerate();
+  void RPAGenerate(int dint);
   void reportLegalizationStats() const;
   void setPaddingGlobal(int left, int right);
   void setPadding(dbMaster *inst,
@@ -293,6 +297,7 @@ public:
   bool checkSwap(int i, int j, vector<Cell *> row);
   bool checkValid(int origincell, int swapcell, int shift, vector<Cell *> row);
   void improver(int swaprange, int shiftrange, int iter);
+  void RPATest();
   void updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, vector<dpRow *> &sortedRows);
   ////////////////////////////////////////////////////////////////
 
@@ -483,13 +488,13 @@ private:
   int64_t hpwl_increment(dbInst *inst, int pt_x, bool mirror) const;
   int64_t hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, 
                           dbNet *net, int pt_x, bool mirror) const;
-  void hpwl_increment(dbInst *inst, vector<move *> moves);
-  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<move *> moves);
-  void hpwl_increment(dbInst *inst, vector<move *> moves, vector<dbInst *> others, 
-                      vector<move *> movess);
-  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<move *> moves, 
+  void hpwl_increment(dbInst *inst, vector<Move *> Moves);
+  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> Moves);
+  void hpwl_increment(dbInst *inst, vector<Move *> Moves, vector<dbInst *> others, 
+                      vector<Move *> Movess);
+  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> Moves, 
                       vector<vector<vector<dbITerm *>>> itermss, vector<dbInst *> others, 
-                      vector<move *> movess, int netCount);
+                      vector<Move *> Movess, int netCount);
   ////////////////////////////////////////////////////////////////
 
   Logger *logger_;
@@ -519,6 +524,7 @@ private:
   int have_multi_row_cells_;
   int max_displacement_x_;           // sites
   int max_displacement_y_;           // sites
+  vector<dbInst*> placement_failures_;
 
   // 2D pixel grid
   Grid *grid_;
