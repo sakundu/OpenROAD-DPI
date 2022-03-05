@@ -533,10 +533,10 @@ private:
                           dbNet *net, int pt_x, bool mirror) const;
   void hpwl_increment(dbInst *inst, vector<Move *> Moves);
   void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> Moves);
-  void hpwl_increment(dbInst *inst, vector<Move *> Moves, vector<dbInst *> others, 
+  void hpwl_increment(dbInst *inst, vector<Move *> Moves, vector<dbInst *> others,
                       vector<Move *> Movess);
-  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> Moves, 
-                      vector<vector<vector<dbITerm *>>> itermss, vector<dbInst *> others, 
+  void hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> Moves,
+                      vector<vector<vector<dbITerm *>>> itermss, vector<dbInst *> others,
                       vector<Move *> Movess, int netCount);
   ////////////////////////////////////////////////////////////////
 
