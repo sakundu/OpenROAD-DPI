@@ -44,6 +44,7 @@
 #include <memory>
 #include <set>
 #include <vector>
+#include <string>
 #include <utility> // pair
 #include <tuple> // pair
 
@@ -125,19 +126,47 @@ struct Cell
   Rect *region_;  // group rect
 };
 
-//access points
+// access points
 struct AccessPoint
 {
   AccessPoint();
-
   int x, y;
   odb::dbTechLayer* layer;
+};
+
+struct PinRPA
+{
+  PinRPA();
+  dbMTerm *mterm_;
+  vector<dpl::AccessPoint> ap_list_;
+  float internal_rpa_value_;
+  float actual_rpa_value_;
+  bool is_boundary_;
+  int llx_;
+  int lly_;
+  int urx_;
+  int ury_;
+};
+
+struct CellRPA
+{
+  CellRPA();
+  dbInst *db_inst_;
+  vector<dpl::PinRPA> pins_;
+  vector<dpl::PinRPA*> l2r_;
+  vector<dpl::PinRPA*> r2l_;
+  bool is_flipped_;
+  dbOrientType orient_;
+  int llx_;
+  int lly_;
+  int width_;
+  int height_;
+  float ioc_;
 };
 
 struct Pin_RPA
 {
   Pin_RPA();
-
   int x_min;
   dbMPin* mpin;
   vector<dpl::AccessPoint> xAPs;
@@ -162,7 +191,7 @@ struct Cell_RPA
   vector<dpl::Pin_RPA> pins;
   double rpa;
 };
-  
+
 struct Group
 {
   Group();
@@ -213,9 +242,9 @@ public:
 class Move
 {
 public:
-  Move(int64_t Movementt, int64_t deltaa, bool flipp);
+  Move(float Movementt, float deltaa, bool flipp);
   Move();
-  int64_t Movement, delta;
+  float movement, delta;
   bool flip;
 };
 
@@ -249,8 +278,20 @@ public:
   // max_displacment is in sites. use zero for defaults.
   void detailedPlacement(int max_displacement_x,
                          int max_displacement_y);
+  void GenerateAP(int dint);
   void GenerateAP();
-  void RPAGenerate(int dint);
+  void RPAGenerate(int dint, vector<vector<Cell_RPA*>> &cell_rpas);
+  void ComputeRPA(int dint, vector<vector<CellRPA*>> &cell_rpas);
+  float rpaIncrementHelp(int start_index, int end_index, int row_index, int dint, int isReport);
+  void rpaIncrementUpdate(int start_index, int end_index, int row_index, int dint);
+  void rpaSwapIncrement(int row_index, int indexA, int indexB, vector<Move *> moves,
+                        int dint, int isReport);
+  void rpaSwapIncrement(vector<CellRPA*> row, int indexA, int indexB,
+                        vector<Move *> moves, int dint);
+  float rpaSwapIncrementHelp(vector<CellRPA> sub_row, int start_index, int end_index,
+                              int main_index, Move *move, int dint);
+  void rpaSwapIncrementUpdate(vector<CellRPA> sub_row, int start_index, int end_index,
+                              int main_index, Move *move, int dint);
   void reportLegalizationStats() const;
   void setPaddingGlobal(int left, int right);
   void setPadding(dbMaster *inst,
@@ -289,16 +330,19 @@ public:
   int getRowSiteCount() const { return row_site_count_; }
   //////////////////////// DP Improver ///////////////////////////
   void swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> &id2index);
-  void SwapAndShift(int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_, 
+  void SwapAndShift(int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
                     vector<dpRow *> &sortedRows, map<int,int> &id2index);
-  void updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows);
+  void updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_,vector<dpRow *> &sortedRows);
   bool swapCellss(Cell *cell1, Cell *cell2);
   dbOrientType orientMirrorY(dbOrientType orient);
   bool checkSwap(int i, int j, vector<Cell *> row);
   bool checkValid(int origincell, int swapcell, int shift, vector<Cell *> row);
   void improver(int swaprange, int shiftrange, int iter);
   void RPATest();
-  void updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, vector<dpRow *> &sortedRows);
+  void updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_,
+                  vector<dpRow *> &sortedRows);
+  void updateRow(vector<vector<CellRPA *>> &all, vector<CellRPA> &tmpCells_,
+                  vector<dpRow *> &sortedRows);
   ////////////////////////////////////////////////////////////////
 
 private:
@@ -507,6 +551,9 @@ private:
 
   vector<Cell> cells_;
   vector<Cell_RPA> cell_rpas_;
+  vector<CellRPA> cellrpas_;
+  vector<vector<CellRPA *>> cellrpas_row_;
+  int dint_;
   vector<Group> groups_;
 
   map<const dbMaster *, Macro> db_master_map_;
