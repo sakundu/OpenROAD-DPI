@@ -47,8 +47,8 @@
 
 #include "Graphics.h"
 #include "dbTransform.h"
-#include "utl/Logger.h"
 #include "ord/OpenRoad.hh"  // closestPtInRect
+#include "utl/Logger.h"
 
 namespace dpl {
 
@@ -58,7 +58,6 @@ using std::vector;
 
 using utl::DPL;
 
-using odb::Point;
 using odb::dbBox;
 using odb::dbBPin;
 using odb::dbBTerm;
@@ -67,11 +66,12 @@ using odb::dbMasterType;
 using odb::dbMPin;
 using odb::dbMTerm;
 using odb::dbNet;
+using odb::dbOrientType;
 using odb::dbPlacementStatus;
-using odb::Rect;
 using odb::dbSigType;
 using odb::dbTransform;
-using odb::dbOrientType;
+using odb::Point;
+using odb::Rect;
 
 Cell::Cell() :
   db_inst_(nullptr),
@@ -101,7 +101,7 @@ Cell::area() const
 
 //////////////////////// DP Improver ////////////////////////////
 
-Move::Move(int64_t Movementt, int64_t deltaa, bool flipp) :
+Move::Move(float Movementt, float deltaa, bool flipp) :
   movement(Movementt),
   delta(deltaa),
   flip(flipp)
@@ -138,7 +138,7 @@ dpRow::dpRow(int x, int y) :
   y_(y)
 {
 }
-  
+
 Cell_RPA::Cell_RPA() :
   db_inst_(nullptr),
   x_(0),
@@ -174,20 +174,62 @@ AccessPoint::AccessPoint()
 {
 }
 
+///////////// RPA Data Structure //////////////////
+PinRPA::PinRPA() :
+  mterm_(nullptr),
+  internal_rpa_value_(0.0),
+  actual_rpa_value_(0.0),
+  is_boundary_(false),
+  llx_(0),
+  lly_(0),
+  urx_(0),
+  ury_(0)
+{
+}
+
+CellRPA::CellRPA() :
+  db_inst_(nullptr),
+  is_flipped_(false),
+  llx_(0),
+  lly_(0),
+  width_(0),
+  height_(0),
+  ioc_(0.0)
+{
+}
 ////////////////////////////////////////////////////////////////
 
-static bool comparator6(const Pin_RPA lhs, const Pin_RPA rhs) {
-   return lhs.x_min < rhs.x_min;
+static bool
+comparator3(const dpRow *lhs, const dpRow *rhs)
+{
+  if (lhs->y_ < rhs->y_) {
+    return true;
+  }
+  else if (lhs->y_ == rhs->y_) {
+    if (lhs->x_ < rhs->x_)
+      return true;
+  }
+  return false;
 }
 
-static bool comparator4(const AccessPoint lhs, const AccessPoint rhs) {
-   return lhs.x < rhs.x;
+static bool
+comparator6(const Pin_RPA lhs, const Pin_RPA rhs)
+{
+  return lhs.x_min < rhs.x_min;
 }
 
-static bool comparator5(const AccessPoint lhs, const AccessPoint rhs) {
-   return lhs.y < rhs.y;
+static bool
+comparator4(const AccessPoint lhs, const AccessPoint rhs)
+{
+  return lhs.x < rhs.x;
 }
-  
+
+static bool
+comparator5(const AccessPoint lhs, const AccessPoint rhs)
+{
+  return lhs.y < rhs.y;
+}
+
 bool
 Opendp::isFixed(const Cell *cell) const
 {
@@ -274,15 +316,13 @@ Opendp::setPadding(dbMaster *master,
 bool
 Opendp::havePadding() const
 {
-  return pad_left_ > 0 || pad_right_ > 0
-    || !master_padding_map_.empty()
-    || !inst_padding_map_.empty();
+  return pad_left_ > 0 || pad_right_ > 0 || !master_padding_map_.empty() || !inst_padding_map_.empty();
 }
 
 void
 Opendp::setDebug(bool displacement,
                  float min_displacement,
-                 const dbInst* debug_instance)
+                 const dbInst *debug_instance)
 {
   if (Graphics::guiActive()) {
     graphics_ = std::make_unique<Graphics>(this,
@@ -292,39 +332,128 @@ Opendp::setDebug(bool displacement,
 }
 
 void
-Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, vector<dpRow *> &sortedRows)
+Opendp::updateRow(vector<vector<CellRPA *>> &all,
+                  vector<CellRPA> &tmpCells_, vector<dpRow *> &sortedRows)
 {
-  //sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
-  int cellCount = (int)tmpCells_.size();
+  // sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
+  int cellCount = <int>tmpCells_.size();
   int i = 0;
   int rowSize = sortedRows.size();
-  
-  vector<Cell_RPA *> row;
+
+  vector<CellRPA *> row;
   int j = 0;
   int db_row_miny = sortedRows[j]->y_;
   int db_row_maxx = sortedRows[j]->x_;
   j++;
-  
+
   i = 0;
-  Cell_RPA *temp = &tmpCells_[i];
+  CellRPA *temp = &tmpCells_[i];
   i++;
-  
+
   while (i <= cellCount && j <= rowSize) {
-    if (db_row_miny != temp->y_ || i == cellCount) {
-      if(db_row_miny == temp->y_ && i == cellCount)
-      {
+    if (db_row_miny != temp->lly_ || i == cellCount) {
+      if (db_row_miny == temp->lly_ && i == cellCount) {
         row.push_back(temp);
-      }
-      else if(db_row_miny != temp->y_ && i == cellCount)
-      {
+      } else if (db_row_miny != temp->lly_ && i == cellCount) {
         row.clear();
         row.push_back(temp);
         all.push_back(row);
         break;
       }
-      
-      auto compareLambda1 = [](const Cell_RPA *lhs, const Cell_RPA *rhs)
-      {
+
+      auto compareLambda1 = [](const CellRPA *lhs, const CellRPA *rhs) {
+        return lhs->llx_ < rhs->llx_;
+      };
+
+      sort(row.begin(), row.end(), compareLambda1);
+      vector<CellRPA *> tmprow;
+      int rowLength = row.size();
+      int k = 0;
+
+      while (k <= rowLength) {
+        if (k < rowLength && row[k]->llx_ < db_row_maxx) {
+          tmprow.push_back(row[k]);
+          k++;
+        } else {
+          all.push_back(tmprow);
+          tmprow.clear();
+
+          if (k == rowLength || j == rowSize) {
+            // logger_->report("Test that it breaks from row");
+            break;
+          }
+          db_row_miny = sortedRows[j]->y_;
+          db_row_maxx = sortedRows[j]->x_;
+          j++;
+        }
+      }
+
+      row.clear();
+      while (db_row_miny != temp->lly_ && i < cellCount && j < rowSize) {
+        while (db_row_miny < temp->lly_) {
+          db_row_miny = sortedRows[j]->y_;
+          db_row_maxx = sortedRows[j]->x_;
+          j++;
+        }
+        while (temp->lly_ < db_row_miny) {
+          dbMaster *tmpMaster = temp->db_inst_->getMaster();
+          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",
+                          tmpMaster->getName());
+          temp = &tmpCells_[i];
+          i++;
+        }
+      }
+      if (i == cellCount) {
+        break;
+      }
+    }
+    row.push_back(temp);
+    temp = &tmpCells_[i];
+    i++;
+  }
+  while (j == rowSize && i < cellCount) {
+    temp = &tmpCells_[i];
+    dbMaster *tmpMaster = temp->db_inst_->getMaster();
+    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}",
+                    tmpMaster->getName(),
+                    temp->llx_,
+                    temp->lly_);
+    i++;
+  }
+  // logger_->report("Update Row is Finished");
+}
+
+void
+Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_,
+                  vector<dpRow *> &sortedRows)
+{
+  //sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
+  int cellCount = (int)tmpCells_.size();
+  int i = 0;
+  int rowSize = sortedRows.size();
+
+  vector<Cell_RPA *> row;
+  int j = 0;
+  int db_row_miny = sortedRows[j]->y_;
+  int db_row_maxx = sortedRows[j]->x_;
+  j++;
+
+  i = 0;
+  Cell_RPA *temp = &tmpCells_[i];
+  i++;
+
+  while (i <= cellCount && j <= rowSize) {
+    if (db_row_miny != temp->y_ || i == cellCount) {
+      if (db_row_miny == temp->y_ && i == cellCount) {
+        row.push_back(temp);
+      } else if (db_row_miny != temp->y_ && i == cellCount) {
+        row.clear();
+        row.push_back(temp);
+        all.push_back(row);
+        break;
+      }
+
+      auto compareLambda1 = [](const Cell_RPA *lhs, const Cell_RPA *rhs) {
         return lhs->x_ < rhs->x_;
       };
 
@@ -337,8 +466,7 @@ Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, 
         if (k < rowLength && row[k]->x_ < db_row_maxx) {
           tmprow.push_back(row[k]);
           k++;
-        }
-        else {
+        } else {
           all.push_back(tmprow);
           tmprow.clear();
 
@@ -360,8 +488,9 @@ Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, 
           j++;
         }
         while (temp->y_ < db_row_miny) {
-          dbMaster* tmpMaster = temp->db_inst_->getMaster();
-          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",tmpMaster->getName());
+          dbMaster *tmpMaster = temp->db_inst_->getMaster();
+          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",
+                          tmpMaster->getName());
           temp = &tmpCells_[i];
           i++;
         }
@@ -369,18 +498,18 @@ Opendp::updateRow(vector<vector<Cell_RPA *>> &all, vector<Cell_RPA> &tmpCells_, 
       if (i == cellCount) {
         break;
       }
-    
     }
     row.push_back(temp);
     temp = &tmpCells_[i];
     i++;
-    
   }
   while (j == rowSize && i < cellCount) {
     temp = &tmpCells_[i];
     dbMaster *tmpMaster = temp->db_inst_->getMaster();
-    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}", 
-                    tmpMaster->getName(), temp->x_, temp->y_);
+    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}",
+                    tmpMaster->getName(),
+                    temp->x_,
+                    temp->y_);
     i++;
   }
   // logger_->report("Update Row is Finished");
@@ -391,11 +520,12 @@ Cell_RPA -> inst
          -> pins
 pins -> shape -> APS
 */
+
 void
-Opendp::GenerateAP()
+Opendp::GenerateAP(int dint)
 {
-  for(Cell_RPA &cell: cell_rpas_)
-  {
+  std::map<odb::dbTechLayer *, vector<int>> pin_layer_track_details;
+  for (CellRPA &cell : cellrpas_) {
     int px;
     int py;
     cell.db_inst_->getOrigin(px, py);
@@ -404,12 +534,125 @@ Opendp::GenerateAP()
     dbTransform inst_xfm(orient, origin);
 
     odb::dbMaster *master = cell.db_inst_->getMaster();
-    for ( dbMTerm *mterm: master->getMTerms()) {
+    for (dbMTerm *mterm : master->getMTerms()) {
       // No need to find access point for power pins
-      if ( mterm->getSigType().isSupply())
-        continue;  
-      
-      for ( dbMPin *mpin: mterm->getMPins()) {
+      if (mterm->getSigType().isSupply())
+        continue;
+
+      cell.pins_.push_back(PinRPA());
+      PinRPA &newPin = cell.pins_.back();
+      int llx_ = INT_MAX, lly_ = INT_MAX, urx_ = INT_MIN, ury_ = INT_MIN;
+      newPin.mterm_ = mterm;
+      for (dbMPin *mpin : mterm->getMPins()) {
+        odb::dbSet<odb::dbBox> pinshapes = mpin->getGeometry();
+        for (odb::dbBox *pinshape : pinshapes) {
+          Rect shapeBox;
+          pinshape->getBox(shapeBox);
+          inst_xfm.apply(shapeBox);
+          odb::dbTechLayer *pinLayer = pinshape->getTechLayer();
+          odb::dbTechLayerType lType = pinLayer->getType();
+
+          if (lType == odb::dbTechLayerType::Value::ROUTING) {
+            // Check if the pin track details is available or not
+            if (!pin_layer_track_details.count(pinLayer)) {
+              // Find the upper pin layer
+              odb::dbTechLayer *upperPinLayer = pinLayer->getUpperLayer();
+              while (upperPinLayer->getType() != odb::dbTechLayerType::Value::ROUTING)
+                upperPinLayer = upperPinLayer->getUpperLayer();
+              odb::dbTrackGrid *tmpGrid = block_->findTrackGrid(upperPinLayer);
+              vector<int> xgrid, ygrid;
+              tmpGrid->getGridX(xgrid);
+              tmpGrid->getGridY(ygrid);
+              int xstart = xgrid[0];
+              int xpitch = xgrid[1] - xgrid[0];
+              int xcount = xgrid.size();
+              int ystart = ygrid[0];
+              int ypitch = ygrid[1] - ygrid[0];
+              int ycount = ygrid.size();
+              pin_layer_track_details[pinLayer] = {xstart, xpitch, xcount, ystart, ypitch, ycount};
+            } if ((shapeBox.xMax() - shapeBox.xMin()) <= (shapeBox.yMax() - shapeBox.yMin())) {
+              // Check if the shape is vertical or horizontal
+              // For Vertical Pin Shapes
+              int top = shapeBox.yMax();
+              int bot = shapeBox.yMin();
+              int x = (shapeBox.xMax() + shapeBox.xMin()) / 2;
+
+              llx_ = std::min(x, llx_);
+              urx_ = std::max(x, urx_);
+
+              int yoffset = pin_layer_track_details[pinLayer][3];
+              int ypitch = pin_layer_track_details[pinLayer][4];
+
+              int count = (top - yoffset) / ypitch;
+              int actualTop = (count * ypitch) + yoffset;
+
+              ury_ = std::max(actualTop, ury_);
+
+              for (int i = actualTop; i >= bot; i -= ypitch) {
+                AccessPoint ap;
+                ap.x = x - cell.llx_ - core_.xMin();
+                ap.y = i - cell.lly_;
+                ap.layer = pinLayer;
+                newPin.ap_list_.push_back(ap);
+              }
+              lly_ = std::min(lly_, newPin.ap_list_.back().y) + cell.lly_;
+            }
+          }
+        }
+      }
+      sort(newPin.ap_list_.begin(), newPin.ap_list_.end(), &comparator4);
+      newPin.llx_ = llx_ - cell.llx_ - core_.xMin();
+      newPin.lly_ = lly_ - cell.lly_ - core_.yMin();
+      newPin.urx_ = urx_ - cell.llx_ - core_.xMin();
+      newPin.ury_ = ury_ - cell.lly_ - core_.yMin();
+
+      // Check if the pin is boundary or not
+      if (newPin.llx_ < dint || cell.width_ - newPin.urx_ < dint) {
+        newPin.is_boundary_ = true;
+      }
+    }
+
+    // x + cell.llx_ , x + w - cell.ll_x
+    cell.l2r_.clear();
+    cell.r2l_.clear();
+
+    for (PinRPA &pin : cell.pins_) {
+      PinRPA *tmp_pin = &pin;
+      cell.l2r_.push_back(tmp_pin);
+      cell.r2l_.push_back(tmp_pin);
+    }
+
+    auto compare_l2r = [](PinRPA *lh, PinRPA *rh) {
+      return lh->llx_ < rh->llx_;
+    };
+
+    auto compare_r2l = [](PinRPA *lh, PinRPA *rh) {
+      return lh->llx_ > rh->llx_;
+    };
+
+    sort(cell.l2r_.begin(), cell.l2r_.end(), compare_l2r);
+    sort(cell.r2l_.begin(), cell.r2l_.end(), compare_r2l);
+  }
+}
+
+void
+Opendp::GenerateAP()
+{
+  for (Cell_RPA &cell : cell_rpas_) {
+    int px;
+    int py;
+    cell.db_inst_->getOrigin(px, py);
+    dbOrientType orient = cell.db_inst_->getOrient();
+    Point origin = Point(px, py);
+    dbTransform inst_xfm(orient, origin);
+
+    odb::dbMaster *master = cell.db_inst_->getMaster();
+    for (dbMTerm *mterm : master->getMTerms()) {
+      // No need to find access point for power pins
+      if (mterm->getSigType().isSupply())
+        continue;
+
+      for (dbMPin *mpin : mterm->getMPins()) {
         odb::dbSet<odb::dbBox> pinshapes = mpin->getGeometry();
         odb::Rect pinbox = mpin->getBBox();
         inst_xfm.apply(pinbox);
@@ -417,42 +660,40 @@ Opendp::GenerateAP()
         newPin.mpin = mpin;
         newPin.x_min = pinbox.xMin();
 
-        for ( odb::dbBox *pinshape: pinshapes) {
+        for (odb::dbBox *pinshape : pinshapes) {
           Rect shapeBox;
           pinshape->getBox(shapeBox);
           inst_xfm.apply(shapeBox);
-          odb::dbTechLayer* pinLayer = pinshape->getTechLayer();
+          odb::dbTechLayer *pinLayer = pinshape->getTechLayer();
           odb::dbTechLayerType lType = pinLayer->getType();
 
-          if ( lType == odb::dbTechLayerType::Value::ROUTING) {
+          if (lType == odb::dbTechLayerType::Value::ROUTING) {
             // Find the upper pin layer
             odb::dbTechLayer *upperPinLayer = pinLayer->getUpperLayer();
-            while ( upperPinLayer->getType() != odb::dbTechLayerType::Value::ROUTING) {
+            while (upperPinLayer->getType() != odb::dbTechLayerType::Value::ROUTING) {
               upperPinLayer = upperPinLayer->getUpperLayer();
             }
 
             odb::dbTrackGrid *tmpGrid = block_->findTrackGrid(upperPinLayer);
             vector<int> xgrid, ygrid;
-            
-            //vector<pair<int,int>> APs;
-            
+
+            // vector<pair<int,int>> APs;
+
             tmpGrid->getGridX(xgrid);
             tmpGrid->getGridY(ygrid);
 
-            //check if the shape is vertical or horizontal
-            if((shapeBox.xMax() - shapeBox.xMin()) <= (shapeBox.yMax() - shapeBox.yMin()))
-            {
+            // check if the shape is vertical or horizontal
+            if ((shapeBox.xMax() - shapeBox.xMin()) <= (shapeBox.yMax() - shapeBox.yMin())) {
               // For Vertical Pin Shapes
               int top = shapeBox.yMax();
               int bot = shapeBox.yMin();
-              int ygap = ygrid[1]-ygrid[0];
-              int x = (shapeBox.xMax() + shapeBox.xMin())/2;
-            
-              int count = (top-ygrid[0])/ygap;
+              int ygap = ygrid[1] - ygrid[0];
+              int x = (shapeBox.xMax() + shapeBox.xMin()) / 2;
+
+              int count = (top - ygrid[0]) / ygap;
               int actualTop = (count * ygap) + ygrid[0];
 
-              for(int i = actualTop; i >= bot; i -= ygap)
-              {
+              for (int i = actualTop; i >= bot; i -= ygap) {
                 AccessPoint ap;
                 ap.x = x;
                 ap.y = i;
@@ -461,100 +702,799 @@ Opendp::GenerateAP()
                 newPin.xAPs.push_back(ap);
                 newPin.yAPs.push_back(ap);
               }
-            }
-            else
-            {
+            } else {
             }
           }
         }
 
-        //After adding all the APS from each shape, sort them
+        // After adding all the APS from each shape, sort them
         sort(newPin.xAPs.begin(), newPin.xAPs.end(), &comparator4);
         sort(newPin.yAPs.begin(), newPin.yAPs.end(), &comparator5);
-        
+
         cell.pins.push_back(newPin);
       }
     }
 
-    //after adding all the pins
+    // after adding all the pins
     sort(cell.pins.begin(), cell.pins.end(), &comparator6);
   }
 }
 
-//default dint is 2000
 void
-Opendp::RPAGenerate(int dint)
+Opendp::ComputeRPA(int dint, vector<vector<CellRPA *>> &cell_rpas)
 {
-  //cell_rpas_;
-  vector<vector<Cell_RPA*>> cell_rpas;
-
-  auto comparatorLambda2 = [] (const Cell_RPA lhs, const Cell_RPA rhs)
-  {
-    return lhs.y_ < rhs.y_;
-  };
-
-  sort(cell_rpas_.begin(), cell_rpas_.end(), comparatorLambda2);
-  
-  odb::dbSet<dbRow> rows = block_->getRows();
-  vector<dpRow *> sortedRows;
-  int maxRowY = INT_MIN;
-  int minRowY = INT_MAX;
-  
-  for (dbRow *row : rows) {
-    Rect rowBox;
-    row->getBBox(rowBox);
-    int y_ = rowBox.yMin();
-    int x_ = rowBox.xMax();
-    x_ -= core_.xMin();
-    y_ -= core_.yMin();
-    if (y_ > maxRowY)
-      maxRowY = y_;
-    if (y_ < minRowY)
-      minRowY = y_;
-    dpRow *tmprow = new dpRow(x_, y_);
-    sortedRows.push_back(tmprow);
-  }
-  
-  sort(sortedRows.begin(), sortedRows.end(), &comparator3);
-  updateRow(cell_rpas,cell_rpas_, sortedRows);
-
   // RPA Computation starts
   for (int i = 0; i < cell_rpas.size(); i++) {
     for (int j = 0; j < cell_rpas[i].size(); j++) {
-      for(int k = 0; k < cell_rpas[i][j]->pins.size(); k++)
-      {
+      string cell_name = cell_rpas[i][j]->db_inst_->getName();
+
+      for (int k = 0; k < cell_rpas[i][j]->pins_.size(); k++) {
+        // If pin do not have any access point add penalty
+        int ap_count = cell_rpas[i][j]->l2r_[k]->ap_list_.size();
+        if (ap_count == 0) {
+          cell_rpas[i][j]->l2r_[k]->internal_rpa_value_ = -2;
+          cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ = -2;
+        } else {
+          cell_rpas[i][j]->l2r_[k]->internal_rpa_value_ = ap_count;
+          cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ = ap_count;
+        }
+
+        // First compute Internal RPA value
+        for (AccessPoint &ap_main : cell_rpas[i][j]->l2r_[k]->ap_list_) {
+          // First Check the Left Neighboring internal pins
+          for (int l = k - 1; l >= 0; l--) {
+            float neighbor_ap_count = 0;
+
+            if ((ap_main.x - cell_rpas[i][j]->l2r_[l]->urx_) > dint)
+              continue;
+
+            for (AccessPoint &ap_neighbor :
+                cell_rpas[i][j]->l2r_[l]->ap_list_) {
+              if ((std::abs(ap_main.x - ap_neighbor.x) <= dint) &&
+                  (ap_main.y == ap_neighbor.y) &&
+                  (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            cell_rpas[i][j]->l2r_[k]->internal_rpa_value_ -=
+              neighbor_ap_count / cell_rpas[i][j]->l2r_[l]->ap_list_.size();
+          }
+
+          // Second Check the right neighboring internal pins
+          for (int l = k + 1; l < cell_rpas[i][j]->l2r_.size(); l++) {
+            float neighbor_ap_count = 0;
+
+            if ((cell_rpas[i][j]->l2r_[l]->llx_ - ap_main.x) > dint)
+              continue;
+
+            for (AccessPoint &ap_neighbor :
+                cell_rpas[i][j]->l2r_[l]->ap_list_) {
+              if ((std::abs(ap_main.x - ap_neighbor.x) <= dint) &&
+                  (ap_main.y == ap_neighbor.y) &&
+                  (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            cell_rpas[i][j]->l2r_[k]->internal_rpa_value_ -=
+                neighbor_ap_count / cell_rpas[i][j]->l2r_[l]->ap_list_.size();
+          }
+        }
+
+        // Update the actual rpa_values
+        cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ =
+            cell_rpas[i][j]->l2r_[k]->internal_rpa_value_;
+        if (!cell_rpas[i][j]->l2r_[k]->is_boundary_) {
+          continue;
+        }
+
+        // Compute w.r.t the neighbor
+        for (AccessPoint &ap_main : cell_rpas[i][j]->l2r_[k]->ap_list_) {
+          // Update Pin Access Point for Left neightbor
+          for (int l = 0; j - 1 >= 0 && l < cell_rpas[i][j - 1]->r2l_.size(); l++) {
+            if (((cell_rpas[i][j]->llx_ + ap_main.x) -
+                (cell_rpas[i][j - 1]->r2l_[l]->urx_ +cell_rpas[i][j - 1]->llx_)) > dint)
+              continue;
+
+            float neighbor_ap_count = 0;
+            for (AccessPoint &ap_neighbor : cell_rpas[i][j - 1]->r2l_[l]->ap_list_) {
+              if ((std::abs(cell_rpas[i][j]->llx_ +
+                  ap_main.x - ap_neighbor.x - cell_rpas[i][j - 1]->llx_) <= dint) &&
+                  (ap_main.y == ap_neighbor.y) && (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ -=
+                neighbor_ap_count / cell_rpas[i][j - 1]->r2l_[l]->ap_list_.size();
+          }
+
+          // Updated Access Point RPA for Right Neighbor
+          for (int l = 0; j + 1 < cell_rpas[i].size() && l < cell_rpas[i][j + 1]->l2r_.size(); l++) {
+            if (((cell_rpas[i][j + 1]->l2r_[l]->llx_ + cell_rpas[i][j + 1]->llx_) -
+                (cell_rpas[i][j]->llx_ + ap_main.x)) > dint)
+              continue;
+
+            float neighbor_ap_count = 0;
+            for (AccessPoint &ap_neighbor : cell_rpas[i][j + 1]->l2r_[l]->ap_list_) {
+              if ((std::abs(cell_rpas[i][j]->llx_ + ap_main.x - ap_neighbor.x -
+                  cell_rpas[i][j + 1]->llx_) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                  (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ -=
+                neighbor_ap_count / cell_rpas[i][j + 1]->l2r_[l]->ap_list_.size();
+          }
+        }
+        cell_rpas[i][j]->ioc_ += (cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ - 1 < 0) ?
+            cell_rpas[i][j]->l2r_[k]->actual_rpa_value_ - 1 : 0;
+      }
+    }
+  }
+  // Updating all the access point w.r.t block
+  // for (int i = 0; i < cell_rpas.size(); i++) {
+  //   for (int j = 0; j < cell_rpas[i].size(); j++) {
+  //     for(int k = 0; k < cell_rpas[i][j]->pins_.size(); k++) {
+  //       for ( AccessPoint &ap: cell_rpas[i][j]->pins_[k].ap_list_ ) {
+  //         ap.x += cell_rpas[i][j]->llx_;
+  //         ap.y += cell_rpas[i][j]->lly_;
+  //       }
+  //     }
+  //   }
+  // }
+}
+
+void
+Opendp::rpaSwapIncrementUpdate(vector<CellRPA> sub_row, int start_index, int end_index,
+                              int main_index, Move *move, int dint)
+{
+  for (int i = start_index; i <= end_index; i++) {
+    int llx = sub_row[i].llx_;
+    int lly = sub_row[i].lly_;
+    bool is_flipped = sub_row[i].is_flipped_;
+
+    if (i == main_index) {
+      llx += move->movement;
+      is_flipped = is_flipped != move->flip ? true : false;
+      sub_row[i].llx_ = llx;
+      sub_row[i].is_flipped_ = is_flipped;
+    }
+
+    sub_row[i].ioc_ = 0;
+    for (int k = 0; k < sub_row[i].pins_.size(); k++) {
+      sub_row[i].pins_[k].actual_rpa_value_ = sub_row[i].pins_[k].internal_rpa_value_;
+
+      if (!sub_row[i].pins_[k].is_boundary_)
+        continue;
+
+      for (AccessPoint ap_main : sub_row[i].l2r_[k]->ap_list_) {
+        int apx = is_flipped ? llx + sub_row[i].width_ - ap_main.x : llx + ap_main.x;
+
+        // Check Left Neighbor
+        for (int l = 0; i - 1 >= 0 && l < sub_row[i - 1].r2l_.size(); l++) {
+          int pin_rightx = sub_row[i - 1].is_flipped_ ? sub_row[i - 1].llx_ +
+              sub_row[i - 1].width_ - sub_row[i].r2l_[l]->llx_ :
+              sub_row[i - 1].r2l_[l]->urx_ + sub_row[i - 1].llx_;
+          if ((apx - pin_rightx) > dint)
+            continue;
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : sub_row[i - 1].r2l_[l]->ap_list_) {
+            int neighbor_apx = sub_row[i - 1].is_flipped_ ? sub_row[i - 1].llx_ +
+                sub_row[i - 1].width_ - ap_neighbor.x : sub_row[i - 1].llx_ + ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          sub_row[i].pins_[k].actual_rpa_value_ -=
+              neighbor_ap_count / sub_row[i - 1].r2l_[l]->ap_list_.size();
+        }
+
+        // Check right neighbor
+        for (int l = 0; i + 1 < sub_row.size() && sub_row[i + 1].l2r_.size(); l++) {
+          int pin_leftx = sub_row[i + 1].is_flipped_ ? sub_row[i + 1].llx_ +
+              sub_row[i + 1].width_ - sub_row[i].l2r_[l]->urx_ :
+              sub_row[i + 1].r2l_[l]->urx_ + sub_row[i + 1].llx_;
+          if ((pin_leftx - apx) > dint)
+            continue;
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : sub_row[i + 1].l2r_[l]->ap_list_) {
+            int neighbor_apx = sub_row[i + 1].is_flipped_ ? sub_row[i + 1].llx_ +
+                sub_row[i + 1].width_ - ap_neighbor.x : sub_row[i + 1].llx_ + ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          sub_row[i].pins_[k].actual_rpa_value_ -= neighbor_ap_count /
+              sub_row[i - 1].r2l_[l]->ap_list_.size();
+        }
+      }
+      sub_row[i].ioc_ += sub_row[i].pins_[k].actual_rpa_value_ - 1 < 0 ?
+          sub_row[i].pins_[k].actual_rpa_value_ - 1 : 0;
+    }
+  }
+}
+
+float
+Opendp::rpaSwapIncrementHelp(vector<CellRPA> sub_row, int start_index,
+                            int end_index, int main_index, Move *move, int dint)
+{
+  float init_ioc = 0;
+  float final_ioc = 0;
+
+  for (int i = start_index; i <= end_index; i++) {
+    init_ioc += sub_row[i].ioc_;
+  }
+
+  for (int i = start_index; i <= end_index; i++) {
+    int llx = sub_row[i].llx_;
+    int lly = sub_row[i].lly_;
+    bool is_flipped = sub_row[i].is_flipped_;
+
+    if (i == main_index) {
+      llx = move->movement;
+      is_flipped = is_flipped != move->flip ? true : false;
+    }
+
+    float cell_ioc = 0;
+    for (int k = 0; k < sub_row[i].pins_.size(); k++) {
+      float pin_rpa = sub_row[i].pins_[k].internal_rpa_value_;
+
+      if (!sub_row[i].pins_[k].is_boundary_)
+        continue;
+
+      for (AccessPoint ap_main : sub_row[i].l2r_[k]->ap_list_) {
+        int apx = is_flipped ? llx + sub_row[i].width_ - ap_main.x : llx + ap_main.x;
+
+        // Check Left Neighbor
+        for (int l = 0; i - 1 >= 0 && l < sub_row[i - 1].r2l_.size(); l++) {
+          int pin_rightx = sub_row[i - 1].is_flipped_ ? sub_row[i - 1].llx_
+              + sub_row[i - 1].width_ - sub_row[i].r2l_[l]->llx_ :
+              sub_row[i - 1].r2l_[l]->urx_ + sub_row[i - 1].llx_;
+          if ((apx - pin_rightx) > dint)
+            continue;
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : sub_row[i - 1].r2l_[l]->ap_list_) {
+            int neighbor_apx = sub_row[i - 1].is_flipped_ ? sub_row[i - 1].llx_ +
+                sub_row[i - 1].width_ - ap_neighbor.x : sub_row[i - 1].llx_ + ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / sub_row[i - 1].r2l_[l]->ap_list_.size();
+        }
+
+        // Check right neighbor
+        for (int l = 0; i + 1 < sub_row.size() && l < sub_row[i + 1].l2r_.size(); l++) {
+          int pin_leftx = sub_row[i + 1].is_flipped_ ? 
+              sub_row[i + 1].llx_ + sub_row[i + 1].width_ -
+              sub_row[i].l2r_[l]->urx_ : sub_row[i + 1].r2l_[l]->urx_ + sub_row[i + 1].llx_;
+          if ((pin_leftx - apx) > dint)
+            continue;
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : sub_row[i + 1].l2r_[l]->ap_list_) {
+            int neighbor_apx = sub_row[i + 1].is_flipped_ ?
+                sub_row[i + 1].llx_ + sub_row[i + 1].width_ -
+                ap_neighbor.x : sub_row[i + 1].llx_ + ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / sub_row[i - 1].r2l_[l]->ap_list_.size();
+        }
+      }
+      cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+    }
+    final_ioc += cell_ioc;
+  }
+  return final_ioc - init_ioc;
+}
+
+void
+Opendp::rpaIncrementUpdate(int start_index, int end_index, int row_index, int dint)
+{
+  start_index = start_index >= 0 ? start_index : 0;
+  end_index = end_index < cellrpas_row_[row_index].size() ?
+      end_index : cellrpas_row_[row_index].size() - 1;
+
+  for (int i = start_index; i <= end_index; i++) {
+    float cell_ioc = 0;
+    int main_shiftx = cellrpas_row_[row_index][i]->is_flipped_ ?
+        cellrpas_row_[row_index][i]->llx_ + cellrpas_row_[row_index][i]->width_:
+        cellrpas_row_[row_index][i]->llx_;
+    int main_multix = cellrpas_row_[row_index][i]->is_flipped_ ? -1 : 1;
+
+    for (int k = 0; k < cellrpas_row_[row_index][i]->pins_.size(); k++) {
+      float pin_rpa = cellrpas_row_[row_index][i]->l2r_[k]->internal_rpa_value_;
+
+      if (!cellrpas_row_[row_index][i]->l2r_[k]->is_boundary_) {
+        cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+        continue;
+      }
+
+      for (AccessPoint ap_main : cellrpas_row_[row_index][i]->l2r_[k]->ap_list_) {
+        int apx = main_shiftx + main_multix * ap_main.x;
+
+        // Check Left Neighbor
+        int neighbor_shiftx, neighbor_multix;
+        if (i - 1 >= 0) {
+          neighbor_shiftx = cellrpas_row_[row_index][i - 1]->is_flipped_ ?
+              cellrpas_row_[row_index][i - 1]->llx_ + cellrpas_row_[row_index][i - 1]->width_:
+              cellrpas_row_[row_index][i - 1]->llx_;
+          neighbor_multix = cellrpas_row_[row_index][i - 1]->is_flipped_ ? -1 : 1;
+        }
+
+        for (int l = 0; i - 1 >= 0 && l < cellrpas_row_[row_index][i - 1]->r2l_.size(); l++) {
+          int pin_rightx = neighbor_multix == 1 ? cellrpas_row_[row_index][i - 1]->r2l_[l]->urx_ :
+              cellrpas_row_[row_index][i - 1]->r2l_[l]->llx_;
+          pin_rightx = neighbor_shiftx + neighbor_multix * pin_rightx;
+          if (std::abs(apx - pin_rightx) > dint) {
+            continue;
+          }
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : cellrpas_row_[row_index][i - 1]->r2l_[l]->ap_list_) {
+            int neighbor_apx = neighbor_shiftx + neighbor_multix * ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / cellrpas_row_[row_index][i - 1]->r2l_[l]->ap_list_.size();
+        }
+
+        // Check right neighbor
+        if (i + 1 < cellrpas_row_[row_index].size()) {
+          neighbor_shiftx = cellrpas_row_[row_index][i + 1]->is_flipped_ ? 
+              cellrpas_row_[row_index][i + 1]->llx_ + cellrpas_row_[row_index][i + 1]->width_ :
+              cellrpas_row_[row_index][i + 1]->llx_;
+          neighbor_multix = cellrpas_row_[row_index][i + 1]->is_flipped_ ? -1 : 1;
+        }
+
+        for (int l = 0; i + 1 < cellrpas_row_[row_index].size() && l <
+            cellrpas_row_[row_index][i + 1]->l2r_.size(); l++) {
+          int pin_leftx = neighbor_multix == 1 ?
+              cellrpas_row_[row_index][i + 1]->l2r_[l]->llx_ :
+              cellrpas_row_[row_index][i + 1]->l2r_[l]->urx_;
+          pin_leftx = neighbor_shiftx + neighbor_multix * pin_leftx;
+
+          if (std::abs(pin_leftx - apx) > dint) {
+            continue;
+          }
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : cellrpas_row_[row_index][i + 1]->l2r_[l]->ap_list_) {
+            int neighbor_apx = neighbor_shiftx + neighbor_multix * ap_neighbor.x;
+
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / cellrpas_row_[row_index][i + 1]->l2r_[l]->ap_list_.size();
+        }
+      }
+      cellrpas_row_[row_index][i]->l2r_[k]->actual_rpa_value_ = pin_rpa;
+      cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+    }
+    cellrpas_row_[row_index][i]->ioc_ = cell_ioc;
+  }
+}
+
+float
+Opendp::rpaIncrementHelp(int start_index, int end_index, int row_index, int dint, int isReport)
+{
+  float final_ioc = 0;
+  for (int i = start_index; i <= end_index; i++) {
+    float cell_ioc = 0;
+    int main_shiftx = cellrpas_row_[row_index][i]->is_flipped_ ?
+        cellrpas_row_[row_index][i]->llx_ + cellrpas_row_[row_index][i]->width_:
+        cellrpas_row_[row_index][i]->llx_;
+    int main_multix = cellrpas_row_[row_index][i]->is_flipped_ ? -1 : 1;
+
+    for (int k = 0; k < cellrpas_row_[row_index][i]->pins_.size(); k++) {
+      float pin_rpa = cellrpas_row_[row_index][i]->l2r_[k]->internal_rpa_value_;
+
+      if (!cellrpas_row_[row_index][i]->l2r_[k]->is_boundary_) {
+        cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+        if (isReport == 1) {
+          string pinName = cellrpas_row_[row_index][i]->l2r_[k]->mterm_->getName();
+          logger_->report("Pin Name:{:s} New RPA:{:f} Old RPA:{:f} Internal RPA:{:f}",
+                          pinName,
+                          pin_rpa,
+                          cellrpas_row_[row_index][i]->l2r_[k]->actual_rpa_value_,
+                          cellrpas_row_[row_index][i]->l2r_[k]->internal_rpa_value_);
+        }
+        continue;
+      }
+
+      for (AccessPoint ap_main : cellrpas_row_[row_index][i]->l2r_[k]->ap_list_) {
+        int apx = main_shiftx + main_multix * ap_main.x;
+
+        // Check Left Neighbor
+        int neighbor_shiftx, neighbor_multix;
+        if (i - 1 >= 0) {
+          neighbor_shiftx = cellrpas_row_[row_index][i - 1]->is_flipped_ ?
+          cellrpas_row_[row_index][i - 1]->llx_ +
+          cellrpas_row_[row_index][i - 1]->width_ :
+          cellrpas_row_[row_index][i - 1]->llx_;
+          neighbor_multix = cellrpas_row_[row_index][i - 1]->is_flipped_ ? -1 : 1;
+        }
+
+        for (int l = 0; i - 1 >= 0 && l < cellrpas_row_[row_index][i - 1]->r2l_.size(); l++) {
+          int pin_rightx = neighbor_multix == 1 ? cellrpas_row_[row_index][i - 1]->r2l_[l]->urx_ :
+              cellrpas_row_[row_index][i - 1]->r2l_[l]->llx_;
+          pin_rightx = neighbor_shiftx + neighbor_multix * pin_rightx;
+          if (std::abs(apx - pin_rightx) > dint) {
+            if (isReport == 1) {
+              string pin_name = cellrpas_row_[row_index][i - 1]->r2l_[l]->mterm_->getName();
+              logger_->report("Left Neighbour Pin:{:s} Right Checker AP_MAINX:{:d} APX:{:d}
+                              RightX:{:d} Width:{:d} Multi:{:d} Shift:{:d}",
+                              pin_name,
+                              ap_main.x,
+                              apx,
+                              pin_rightx,
+                              cellrpas_row_[row_index][i]->width_,
+                              main_multix,
+                              main_shiftx);
+            }
+            continue;
+          }
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : cellrpas_row_[row_index][i - 1]->r2l_[l]->ap_list_) {
+            int neighbor_apx = neighbor_shiftx + neighbor_multix * ap_neighbor.x;
+            if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y) &&
+                (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / cellrpas_row_[row_index][i - 1]->r2l_[l]->ap_list_.size();
+          if (isReport == 1) {
+            string pin_name = cellrpas_row_[row_index][i - 1]->r2l_[l]->mterm_->getName();
+            logger_->report("Left Neighbor Pin:{:s} Ratio:{:f}", pin_name,
+                neighbor_ap_count/cellrpas_row_[row_index][i - 1]->r2l_[l]->ap_list_.size());
+          }
+        }
+
+        // Check right neighbor
+        if (i + 1 < cellrpas_row_[row_index].size()) {
+          neighbor_shiftx = cellrpas_row_[row_index][i + 1]->is_flipped_ ? 
+              cellrpas_row_[row_index][i + 1]->llx_ +
+              cellrpas_row_[row_index][i + 1]->width_ :
+              cellrpas_row_[row_index][i + 1]->llx_;
+          neighbor_multix = cellrpas_row_[row_index][i + 1]->is_flipped_ ? -1 : 1;
+        }
+
+        for (int l = 0; i + 1 < cellrpas_row_[row_index].size() &&
+            l < cellrpas_row_[row_index][i + 1]->l2r_.size(); l++) {
+          int pin_leftx = neighbor_multix == 1 ?
+              cellrpas_row_[row_index][i + 1]->l2r_[l]->llx_ :
+              cellrpas_row_[row_index][i + 1]->l2r_[l]->urx_;
+          pin_leftx = neighbor_shiftx + neighbor_multix * pin_leftx;
+          if (std::abs(pin_leftx - apx) > dint) {
+            if (isReport == 1) {
+              string pin_name = cellrpas_row_[row_index][i + 1]->l2r_[l]->mterm_->getName();
+              logger_->report("Right Neighbour Pin:{:s} Right Checker AP_MAINX:{:d}
+                              APX:{:d} RightX:{:d} Width:{:d} Multi:{:d} Shift:{:d}",
+                              pin_name,
+                              ap_main.x,
+                              apx,
+                              pin_leftx,
+                              cellrpas_row_[row_index][i]->width_,
+                              main_multix,
+                              main_shiftx);
+            }
+            continue;
+          }
+
+          float neighbor_ap_count = 0;
+          for (AccessPoint &ap_neighbor : cellrpas_row_[row_index][i + 1]->l2r_[l]->ap_list_) {
+            int neighbor_apx = neighbor_shiftx + neighbor_multix * ap_neighbor.x;
+
+            if ((std::abs(apx - neighbor_apx) <= dint) &&
+                (ap_main.y == ap_neighbor.y) && (ap_main.layer == ap_neighbor.layer))
+              neighbor_ap_count += 1;
+          }
+          pin_rpa -= neighbor_ap_count / cellrpas_row_[row_index][i + 1]->l2r_[l]->ap_list_.size();
+          if (isReport == 1) {
+            string pin_name = cellrpas_row_[row_index][i + 1]->l2r_[l]->mterm_->getName();
+            logger_->report("Right Neighbor Pin:{:s} Ratio:{:f}", pin_name,
+                neighbor_ap_count / cellrpas_row_[row_index][i + 1]->l2r_[l]->ap_list_.size());
+          }
+        }
+      }
+      if (isReport == 1) {
+        string pinName = cellrpas_row_[row_index][i]->l2r_[k]->mterm_->getName();
+        logger_->report("Pin Name:{:s} New RPA:{:f} Old RPA:{:f} Internal RPA:{:f}",
+                        pinName,
+                        pin_rpa,
+                        cellrpas_row_[row_index][i]->l2r_[k]->actual_rpa_value_,
+                        cellrpas_row_[row_index][i]->l2r_[k]->internal_rpa_value_);
+      }
+      cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+    }
+    if (isReport == 1) {
+      string cellName = cellrpas_row_[row_index][i]->db_inst_->getName();
+      logger_->report("Cell Name: {:s} Previous IOC:{:f} New IOC:{:f} Loc:{:d}",
+                      cellName,
+                      cellrpas_row_[row_index][i]->ioc_,
+                      cell_ioc,
+                      cellrpas_row_[row_index][i]->llx_);
+    }
+    final_ioc += cell_ioc;
+  }
+  return final_ioc;
+}
+
+void
+Opendp::rpaSwapIncrement(vector<CellRPA *> row, int indexA, int indexB,
+                         vector<Move *> moves, int dint)
+{
+  vector<int> testRow;
+  int indexMain = indexA;
+  int indexOther = indexB;
+  if (indexA < indexB) {
+    if (indexA > 0) {
+      testRow.push_back(indexA - 1);
+    }
+    testRow.push_back(indexB);
+    if ((indexB - indexA) == 1) {
+      testRow.push_back(indexA);
+    } else if ((indexB - indexA) == 2) {
+      testRow.push_back(indexA + 1);
+      testRow.push_back(indexA);
+    } else if ((indexB - indexA) == 3) {
+      testRow.push_back(indexA + 1);
+      testRow.push_back(indexB - 1);
+      testRow.push_back(indexA);
+    } else {
+      testRow.push_back(indexA + 1);
+      testRow.push_back(indexB - 1);
+      testRow.push_back(indexA);
+    }
+    if ((indexB + 1) < row.size())
+      testRow.push_back(indexB + 1);
+  } else {
+    // indexA > indexB
+    if (indexB > 0) {
+      testRow.push_back(indexB - 1);
+    } else {
+    }
+    testRow.push_back(indexA);
+    if ((indexA - indexB) == 1) {
+      testRow.push_back(indexB);
+    } else if ((indexA - indexB) == 2) {
+      testRow.push_back(indexB + 1);
+      testRow.push_back(indexB);
+    } else if ((indexA - indexB) == 3) {
+      testRow.push_back(indexB + 1);
+      testRow.push_back(indexA - 1);
+      testRow.push_back(indexB);
+    } else {
+      testRow.push_back(indexB + 1);
+      testRow.push_back(indexA - 1);
+      testRow.push_back(indexB);
+    }
+    if ((indexA + 1) < row.size())
+      testRow.push_back(indexA + 1);
+  }
+
+  // std::swap(row[indexA], row[indexB]);
+
+  CellRPA *swap_cell = row[indexA];
+  row[indexA] = row[indexB];
+  row[indexB] = swap_cell;
+
+  indexMain = indexB;
+  indexOther = indexA;
+
+  for (Move *move : moves) {
+    int mainCellX = 0;
+    int mainCellY = 0;
+    int otherCellX = 0;
+    int otherCellY = 0;
+    row[indexMain]->db_inst_->getLocation(mainCellX, mainCellX);
+    row[indexOther]->db_inst_->getLocation(otherCellX, otherCellY);
+    int deltaMoveMain = move->movement - mainCellX;
+    int deltaOther = mainCellX - otherCellX;
+    if (move->flip == false) {
+      for (PinRPA *pin : row[indexMain]->l2r_) {
+        for (AccessPoint ap : pin->ap_list_) {
+          ap.x += deltaMoveMain;
+        }
+      }
+    } else {
+      for (PinRPA *pin : row[indexMain]->r2l_) {
+        for (AccessPoint ap : pin->ap_list_) {
+          ap.x = row[indexMain]->llx_ + row[indexMain]->width_ -
+                (ap.x - row[indexMain]->llx_) + deltaMoveMain;
+        }
+      }
+    }
+    for (PinRPA *pin : row[indexOther]->l2r_) {
+      for (AccessPoint ap : pin->ap_list_) {
+        ap.x += deltaOther;
+      }
+    }
+
+    for (int i = 0; i < testRow.size(); i++) {
+      string cell_name = row[testRow[i]]->db_inst_->getName();
+
+      int llx = row[testRow[i]]->llx_;
+      int lly = row[testRow[i]]->lly_;
+      bool is_flipped = row[testRow[i]]->is_flipped_;
+
+      if (testRow[i] == indexMain) {
+        llx = move->movement;
+        is_flipped = is_flipped != move->flip ? true : false;
+      }
+
+      float cell_ioc = 0;
+      for (int k = 0; k < row[testRow[i]]->pins_.size(); k++) {
+        float pin_rpa = row[testRow[i]]->pins_[k].internal_rpa_value_;
+
+        if (!row[testRow[i]]->pins_[k].is_boundary_)
+          continue;
+
+        for (AccessPoint ap_main : row[testRow[i]]->l2r_[k]->ap_list_) {
+          int apx = ap_main.x;
+
+          // Check Left Neighbor
+          for (int l = 0; i - 1 >= 0 && l < row[testRow[i] - 1]->r2l_.size(); l++) {
+            float neighbor_ap_count = 0;
+            for (AccessPoint &ap_neighbor : row[testRow[i] - 1]->r2l_[l]->ap_list_) {
+              int neighbor_apx = ap_neighbor.x;
+              if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y)
+                  && (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            pin_rpa -= neighbor_ap_count / row[testRow[i] - 1]->r2l_[l]->ap_list_.size();
+          }
+
+          // Check right neighbor
+          for (int l = 0; i + 1 < row.size() && row[testRow[i] + 1]->l2r_.size(); l++) {
+            float neighbor_ap_count = 0;
+            for (AccessPoint &ap_neighbor : row[testRow[i] + 1]->l2r_[l]->ap_list_) {
+              int neighbor_apx = ap_neighbor.x;
+              if ((std::abs(apx - neighbor_apx) <= dint) && (ap_main.y == ap_neighbor.y)
+                  && (ap_main.layer == ap_neighbor.layer))
+                neighbor_ap_count += 1;
+            }
+            pin_rpa -= neighbor_ap_count / row[testRow[i] + 1]->r2l_[l]->ap_list_.size();
+          }
+        }
+        cell_ioc += pin_rpa - 1 < 0 ? pin_rpa - 1 : 0;
+      }
+      move->delta += row[testRow[i]]->ioc_ - cell_ioc;
+    }
+
+    // change x back after computation
+    if (move->flip == false) {
+      for (PinRPA *pin : row[indexMain]->l2r_) {
+        for (AccessPoint ap : pin->ap_list_) {
+          ap.x -= deltaMoveMain;
+        }
+      }
+    } else {
+      for (PinRPA *pin : row[indexMain]->r2l_) {
+        for (AccessPoint ap : pin->ap_list_) {
+          ap.x = row[indexMain]->llx_ + row[indexMain]->width_ -
+                (ap.x - row[indexMain]->llx_) - deltaMoveMain;
+        }
+      }
+    }
+    for (PinRPA *pin : row[indexOther]->l2r_) {
+      for (AccessPoint ap : pin->ap_list_) {
+        ap.x -= deltaOther;
+      }
+    }
+  }
+  // std::swap(row[indexA], row[indexB]);
+  swap_cell = row[indexA];
+  row[indexA] = row[indexB];
+  row[indexB] = swap_cell;
+}
+
+void
+Opendp::rpaSwapIncrement(int row_index, int indexA, int indexB,
+                        vector<Move *> moves, int dint, int isReport)
+{
+  bool compute_together = false;
+  if (std::abs(indexA - indexB) < 3)
+    compute_together = true;
+
+  float delta1 = 0, delta2 = 0;
+
+  // Swap two cells
+  CellRPA *swap_cell = cellrpas_row_[row_index][indexA];
+  cellrpas_row_[row_index][indexA] = cellrpas_row_[row_index][indexB];
+  cellrpas_row_[row_index][indexB] = swap_cell;
+
+  int index_main = indexB;
+  int index_other = indexA;
+
+  // Update the location of other cell
+  int other_llx = cellrpas_row_[row_index][index_other]->llx_;
+  int main_llx = cellrpas_row_[row_index][index_main]->llx_;
+  bool main_is_flipped = cellrpas_row_[row_index][index_main]->is_flipped_;
+  cellrpas_row_[row_index][index_other]->llx_ = main_llx;
+
+  if (!compute_together) {
+    float init_ioc = 0;
+    for (int i = index_other - 1; i >= 0 & i <= index_other; i++) {
+      init_ioc += cellrpas_row_[row_index][i]->ioc_;
+    }
+    int start_index = index_other - 1 >= 0 ? index_other - 1 : index_other;
+    int end_index = index_other + 1 <
+        cellrpas_row_[row_index].size() ? index_other + 1 : index_other;
+    float final_ioc = rpaIncrementHelp(start_index, end_index,
+                                      row_index, dint, isReport);
+    delta1 = init_ioc - final_ioc;
+  }
+  int start_index, end_index;
+  if (compute_together) {
+    int hindex = index_main > index_other ? index_main : index_other;
+    int lindex = index_main > index_other ? index_other : index_main;
+    start_index = lindex - 1 >= 0 ? lindex - 1 : lindex;
+    end_index = hindex + 1 < cellrpas_row_[row_index].size() ?
+                hindex + 1 : hindex;
+  } else {
+    start_index = index_main - 1 >= 0 ? index_main - 1 : index_main;
+    end_index = index_main + 1 < cellrpas_row_[row_index].size() ?
+                index_main + 1 : index_main;
+  }
+
+  float init_ioc = 0;
+  for (int i = start_index; i <= end_index; i++) {
+    init_ioc += cellrpas_row_[row_index][i]->ioc_;
+  }
+
+  for (Move *move : moves) {
+    cellrpas_row_[row_index][index_main]->llx_ = move->movement - core_.xMin();
+    cellrpas_row_[row_index][index_main]->is_flipped_ = move->flip != main_is_flipped ?
+                                                        true : false;
+    float final_ioc = rpaIncrementHelp(start_index, end_index, row_index, dint, isReport);
+    delta2 = init_ioc - final_ioc;
+    move->delta = delta2 + delta1;
+  }
+
+  // Update back the cells
+  cellrpas_row_[row_index][index_main]->llx_ = main_llx;
+  cellrpas_row_[row_index][index_main]->is_flipped_ = main_is_flipped;
+  cellrpas_row_[row_index][index_other]->llx_ = other_llx;
+  swap_cell = cellrpas_row_[row_index][indexA];
+  cellrpas_row_[row_index][indexA] = cellrpas_row_[row_index][indexB];
+  cellrpas_row_[row_index][indexB] = swap_cell;
+}
+
+// default dint is 2000
+void
+Opendp::RPAGenerate(int dint, vector<vector<Cell_RPA *>> &cell_rpas)
+{
+  // cell_rpas_
+  // RPA Computation starts
+  for (int i = 0; i < cell_rpas.size(); i++) {
+    for (int j = 0; j < cell_rpas[i].size(); j++) {
+      for (int k = 0; k < cell_rpas[i][j]->pins.size(); k++) {
         double xPinRPA = cell_rpas[i][j]->pins[k].xAPs.size();
         double yPinRPA = cell_rpas[i][j]->pins[k].yAPs.size();
-        if((xPinRPA == 0) & (yPinRPA == 0))
-        {
+        if ((xPinRPA == 0) & (yPinRPA == 0)) {
           cell_rpas[i][j]->rpa = std::min(cell_rpas[i][j]->rpa, -2.0);
         }
         string pinName = cell_rpas[i][j]->pins[k].mpin->getMTerm()->getName();
         string cellName = cell_rpas[i][j]->db_inst_->getName();
-        logger_->report("Cell:{:s} Pin:{:s}",cellName, pinName);
-        for(AccessPoint APmain : cell_rpas[i][j]->pins[k].xAPs)
-        {
-          for(int l = 1; l < 4; l++)
-          {
+        logger_->report("Cell:{:s} Pin:{:s}", cellName, pinName);
+        for (AccessPoint APmain : cell_rpas[i][j]->pins[k].xAPs) {
+          for (int l = 1; l < 4; l++) {
             //check left neighbors
-            if((k-l) < 0)
-            {
-              if((j-1) >= 0)
-              {
-                int size = cell_rpas[i][j-1]->pins.size();
+            if ((k - l) < 0) {
+              if ((j - 1) >= 0) {
+                int size = cell_rpas[i][j - 1]->pins.size();
                 double rpaTrack = 0;
-                if((size+(k-l)) >= 0)
-                {
-                  for(AccessPoint APneib : cell_rpas[i][j-1]->pins[size+(k-l)].xAPs)
-                  {
-                    if((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
-                    {
+                if ((size + (k - l)) >= 0) {
+                  for (AccessPoint APneib : cell_rpas[i][j - 1]->pins[size + (k - l)].xAPs) {
+                    if ((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer)) {
                       rpaTrack += 1;
                     }
                   }
-                  if(cell_rpas[i][j-1]->pins[size+(k-l)].xAPs.size() != 0)
-                  {
-                    double upa = rpaTrack/cell_rpas[i][j-1]->pins[size+(k-l)].xAPs.size();
+                  if (cell_rpas[i][j - 1]->pins[size + (k - l)].xAPs.size() != 0) {
+                    double upa = rpaTrack / cell_rpas[i][j - 1]->pins[size + (k - l)].xAPs.size();
                     xPinRPA = xPinRPA - upa;
                     logger_->report("UAP: {:f}", upa);
                   }
@@ -562,64 +1502,51 @@ Opendp::RPAGenerate(int dint)
               }
             }
             //neighbor is inside main cell
-            else
-            {
+            else {
               double rpaTrack = 0;
-              for(AccessPoint APneib : cell_rpas[i][j]->pins[k-l].xAPs)
-              {
-                if((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
-                {
+              for (AccessPoint APneib : cell_rpas[i][j]->pins[k - l].xAPs) {
+                if ((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer)) {
                   rpaTrack += 1;
                 }
               }
-              if(cell_rpas[i][j]->pins[k-l].xAPs.size() != 0)
-              {
-                double upa = rpaTrack/cell_rpas[i][j]->pins[k-l].xAPs.size();
+              if (cell_rpas[i][j]->pins[k - l].xAPs.size() != 0) {
+                double upa = rpaTrack / cell_rpas[i][j]->pins[k - l].xAPs.size();
                 xPinRPA = xPinRPA - upa;
                 logger_->report("UAP: {:f}", upa);
               }
             }
-            //check right nerghbors
-            //right neighbor is not in main cell
-            if((k+l) >= cell_rpas[i][j]->pins.size())
-            {
-              if((j+1) < cell_rpas[i].size())
-              {
-                //int size = cell_rpas[i][j+1]->pins.size();
+            // check right nerghbors
+            // right neighbor is not in main cell
+            if ((k + l) >= cell_rpas[i][j]->pins.size()) {
+              if ((j + 1) < cell_rpas[i].size()) {
+                // int size = cell_rpas[i][j+1]->pins.size();
                 double rpaTrack = 0;
-                int index = k+l-cell_rpas[i][j]->pins.size();
-                if(index < cell_rpas[i][j+1]->pins.size())
-                {
-                  for(AccessPoint APneib : cell_rpas[i][j+1]->pins[index].xAPs)
-                  {
-                    if((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
-                    {
+                int index = k + l - cell_rpas[i][j]->pins.size();
+                if (index < cell_rpas[i][j + 1]->pins.size()) {
+                  for (AccessPoint APneib : cell_rpas[i][j + 1]->pins[index].xAPs) {
+                    if ((std::abs(APmain.x - APneib.x) <= dint) &
+                        (APmain.y == APneib.y) & (APmain.layer == APneib.layer)) {
                       rpaTrack += 1;
                     }
                   }
-                  if(cell_rpas[i][j+1]->pins[index].xAPs.size() != 0)
-                  {
-                    double upa = rpaTrack/cell_rpas[i][j+1]->pins[index].xAPs.size();
+                  if (cell_rpas[i][j + 1]->pins[index].xAPs.size() != 0) {
+                    double upa = rpaTrack / cell_rpas[i][j + 1]->pins[index].xAPs.size();
                     xPinRPA = xPinRPA - upa;
                     logger_->report("UAP: {:f}", upa);
                   }
                 }
               }
-            }
-            //neighbor is inside main cell
-            else
-            {
+            } else {
+              // neighbor is inside main cell
               double rpaTrack = 0;
-              for(AccessPoint APneib : cell_rpas[i][j]->pins[k+l].xAPs)
-              {
-                if((std::abs(APmain.x - APneib.x) <= dint) & (APmain.y == APneib.y) & (APmain.layer == APneib.layer))
-                {
+              for (AccessPoint APneib : cell_rpas[i][j]->pins[k + l].xAPs) {
+                if ((std::abs(APmain.x - APneib.x) <= dint) &
+                    (APmain.y == APneib.y) & (APmain.layer == APneib.layer)) {
                   rpaTrack += 1;
                 }
               }
-              if(cell_rpas[i][j]->pins[k+l].xAPs.size() != 0)
-              {
-                double upa = rpaTrack/cell_rpas[i][j]->pins[k+l].xAPs.size();
+              if (cell_rpas[i][j]->pins[k + l].xAPs.size() != 0) {
+                double upa = rpaTrack / cell_rpas[i][j]->pins[k + l].xAPs.size();
                 xPinRPA = xPinRPA - upa;
                 logger_->report("UAP: {:f}", upa);
               }
@@ -628,15 +1555,12 @@ Opendp::RPAGenerate(int dint)
         }
         xPinRPA -= 1;
         yPinRPA -= 1;
-        
-        logger_->report("Cell:{:s} Pin:{:s} RPA:{:f}",cellName, pinName, xPinRPA);
-        //double minPinRPA = xPinRPA < yPinRPA?xPinRPA:yPinRPA;
+        logger_->report("Cell:{:s} Pin:{:s} RPA:{:f}", cellName, pinName, xPinRPA);
+        // double minPinRPA = xPinRPA < yPinRPA?xPinRPA:yPinRPA;
         cell_rpas[i][j]->rpa += xPinRPA < 0 ? xPinRPA : 0;
-        //cell_rpas[i][j]->rpa = cell_rpas[i][j]->rpa < minPinRPA?cell_rpas[i][j]->rpa:minPinRPA ;
       }
     }
   }
-
 }
 
 void
@@ -650,8 +1574,7 @@ Opendp::detailedPlacement(int max_displacement_x,
     // defaults
     max_displacement_x_ = 500;
     max_displacement_y_ = 100;
-  }
-  else {
+  } else {
     max_displacement_x_ = max_displacement_x;
     max_displacement_y_ = max_displacement_y;
   }
@@ -662,30 +1585,6 @@ Opendp::detailedPlacement(int max_displacement_x,
   // Save displacement stats before updating instance DB locations.
   findDisplacementStats();
   updateDbInstLocations();
-  logger_->report("Starting Access Point Generator.");
-  GenerateAP();
-  logger_->report("Starting RPA Generator.");
-  RPAGenerate(500);
-  
-  char s1 = '{', s2 = '}';
-  
-  for(Cell_RPA cell: cell_rpas_)
-  {
-    //if(cell.db_inst_->getName() == "_33512_")
-    //{
-      logger_->report("Cell name : {:s}, pin count : {:d}, rpa value: {:f}", cell.db_inst_->getName(), cell.pins.size(), cell.rpa);
-      for(Pin_RPA pin: cell.pins)
-      {
-        logger_->report("Pin name : {:s}, PA count : {:d}", pin.mpin->getMTerm()->getName(), pin.xAPs.size());
-        for(AccessPoint ap: pin.xAPs)
-        {
-          float x = ap.x/dbUnit;
-          float y = ap.y/dbUnit;
-          //logger_->report("Access point x : {:d}, y : {:d}", ap.x, ap.y);
-          logger_->report("createMarker -bbox {:c}{:f} {:f} {:f} {:f}{:c}",s1,x,y,x,y,s2);
-        }
-      }
-  }
 
   if (!placement_failures_.empty()) {
     logger_->info(DPL, 34, "Detailed placement failed on:");
@@ -727,8 +1626,8 @@ Opendp::reportLegalizationStats() const
   double hpwl_legal = hpwl();
   logger_->report("legalized HPWL       {:10.1f} u", dbuToMicrons(hpwl_legal));
   int hpwl_delta = (hpwl_before_ == 0.0)
-    ? 0.0
-    : round((hpwl_legal - hpwl_before_) / hpwl_before_ * 100);
+      ? 0.0
+      : round((hpwl_legal - hpwl_before_) / hpwl_before_ * 100);
   logger_->report("delta HPWL           {:10} %", hpwl_delta);
   logger_->report("");
 }
@@ -743,19 +1642,6 @@ comparator1(const Cell lhs, const Cell rhs)
 }
 
 static bool
-comparator3(const dpRow *lhs, const dpRow *rhs)
-{
-  if (lhs->y_ < rhs->y_) {
-    return true;
-  }
-  else if (lhs->y_ == rhs->y_) {
-    if (lhs->x_ < rhs->x_)
-      return true;
-  }
-  return false;
-}
-
-static bool
 comparator2(const Cell *lhs, const Cell *rhs)
 {
   return lhs->x_ < rhs->x_;
@@ -764,17 +1650,24 @@ comparator2(const Cell *lhs, const Cell *rhs)
 bool
 Opendp::checkSwap(int i, int j, vector<Cell *> row)
 {
-  if (row[i]->hold_ || row[j]->hold_ || isFixed(row[i]) || isFixed(row[j]) || !row[i]->is_placed_ || !row[j]->is_placed_) {
+  if (row[i]->hold_ || row[j]->hold_ || isFixed(row[i]) || isFixed(row[j])) {
+    // logger_->report("Inside checkSwap");
     return false;
   }
+
   int check1 = 10;
   int check2 = 10;
+
   if (i + 1 < row.size()) {
-    check1 = (row[i + 1]->x_ - padLeft(row[i]) * site_width_ * 2 - (row[i]->x_ + row[j]->width_)) / site_width_;
+    check1 = (row[i + 1]->x_ - padLeft(row[i]) * site_width_ * 2 -
+              (row[i]->x_ + row[j]->width_)) / site_width_;
   }
+
   if (j + 1 < row.size()) {
-    check2 = (row[j + 1]->x_ - padLeft(row[j]) * site_width_ * 2 - (row[j]->x_ + row[i]->width_)) / site_width_;
+    check2 = (row[j + 1]->x_ - padLeft(row[j]) * site_width_ * 2 -
+              (row[j]->x_ + row[i]->width_)) / site_width_;
   }
+
   if (check1 < 0 || check2 < 0) {
     // if(i == j)
     // printf("they are the same!!!!");
@@ -783,11 +1676,12 @@ Opendp::checkSwap(int i, int j, vector<Cell *> row)
   return true;
 }
 
-// Computes HPWL change of a net based on the new horizontal 
+// Computes HPWL change of a net based on the new horizontal
 // location of the cell and the flipping condition.
 // This function is used in mirror OPT.
 int64_t
-Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int pt_x, bool mirror) const
+Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms,
+                        dbNet *net, int pt_x, bool mirror) const
 {
   Rect netBox = getBox(net);
   int64_t net_hpwl = netBox.dx() + netBox.dy();
@@ -803,8 +1697,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int p
     if (iterm->getAvgXY(&x, &y)) {
       Rect iterm_rect(x, y, x, y);
       iterm_box.merge(iterm_rect);
-    }
-    else {
+    } else {
       // This clause is sort of worthless because getAvgXY prints
       // a warning when it fails.
       dbInst *inst = iterm->getInst();
@@ -824,9 +1717,9 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int p
   if (mirror) {
     mirror_x = 2 * cellPtX + cellWidth - iterm_box.xMin() - iterm_box.xMax();
   }
-  
+
   int delta_x = pt_x - cellPtX + mirror_x;
-  
+
   // Considering there wont be any movement along the y axis
   iterm_box.moveDelta(delta_x, 0);
   bool isContain = netBox.contains(iterm_box);
@@ -854,8 +1747,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int p
       if (iterm_->getAvgXY(&x, &y)) {
         Rect iterm_rect_(x, y, x, y);
         new_net_box.merge(iterm_rect_);
-      }
-      else {
+      } else {
         // This clause is sort of worthless because getAvgXY prints
         // a warning when it fails.
         dbInst *inst = iterm_->getInst();
@@ -885,7 +1777,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, int p
   return new_hpwl - net_hpwl;
 }
 
-// Compute HPWL change due to the horizontal movement of a cell 
+// Compute HPWL change due to the horizontal movement of a cell
 // and its orientation change. This function is used in mirror OPT.
 int64_t
 Opendp::hpwl_increment(dbInst *inst, int pt_x, bool mirror) const
@@ -906,8 +1798,7 @@ Opendp::hpwl_increment(dbInst *inst, int pt_x, bool mirror) const
         vector<dbITerm *> newvector;
         newvector.push_back(iterm);
         iterms.push_back(newvector);
-      }
-      else {
+      } else {
         iterms[i].push_back(iterm);
       }
     }
@@ -923,7 +1814,7 @@ Opendp::hpwl_increment(dbInst *inst, int pt_x, bool mirror) const
 }
 
 // Compute HPWL change for multiple move of a cell.
-// This is used to find optimal shifting point. 
+// This is used to find optimal shifting point.
 void
 Opendp::hpwl_increment(dbInst *inst, vector<Move *> moves)
 {
@@ -941,8 +1832,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<Move *> moves)
       vector<dbITerm *> newvector;
       newvector.push_back(iterm);
       iterms.push_back(newvector);
-    }
-    else {
+    } else {
       iterms[i].push_back(iterm);
     }
   }
@@ -963,20 +1853,28 @@ Opendp::checkValid(int origincell, int swapcell, int shift, vector<Cell *> row)
   int check1 = 10;
   int check2 = 10;
   if (swapcell + 1 < row.size()) {
-    check1 = (row[swapcell + 1]->x_ - (row[swapcell]->x_ + row[origincell]->width_) - padLeft(row[swapcell]) * site_width_ * 2 - shift * site_width_) / site_width_;
-  }
-  else {
-    if ((row[swapcell]->x_ + row[origincell]->width_ + shift * site_width_) > (row[swapcell]->x_ + row[swapcell]->width_)) {
+    check1 = (row[swapcell + 1]->x_ - (row[swapcell]->x_ +
+              row[origincell]->width_) -
+              padLeft(row[swapcell]) * site_width_ * 2
+              - shift * site_width_) / site_width_;
+  } else {
+    if ((row[swapcell]->x_ + row[origincell]->width_ + shift * site_width_) >
+        (row[swapcell]->x_ + row[swapcell]->width_)) {
       return false;
     }
   }
   if ((swapcell - 1) != origincell) {
     if (swapcell - 1 >= 0) {
-      check2 = (row[swapcell]->x_ - (row[swapcell - 1]->x_ + row[swapcell - 1]->width_) - padLeft(row[swapcell]) * site_width_ * 2 + shift * site_width_) / site_width_;
+      check2 = (row[swapcell]->x_ - (row[swapcell - 1]->x_ +
+                row[swapcell - 1]->width_) -
+                padLeft(row[swapcell]) * site_width_ * 2 +
+                shift * site_width_) / site_width_;
     }
-  }
-  else {
-    check2 = (row[swapcell]->x_ - (row[swapcell - 1]->x_ + row[swapcell]->width_) - padLeft(row[swapcell]) * site_width_ * 2 + shift * site_width_) / site_width_;
+  } else {
+    check2 = (row[swapcell]->x_ - (row[swapcell - 1]->x_ +
+              row[swapcell]->width_) -
+              padLeft(row[swapcell]) * site_width_ * 2 +
+              shift * site_width_) / site_width_;
   }
   if (check1 < 0 || check2 < 0 || check1 == 1 || check2 == 1) {
     return false;
@@ -991,7 +1889,8 @@ Opendp::checkValid(int origincell, int swapcell, int shift, vector<Cell *> row)
 // Compute HPWL change for multiple move of a cell.
 // This is used to find optimal shifting point.
 void
-Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> moves)
+Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms,
+                        dbNet *net, vector<Move *> moves)
 {
   Rect netBox = getBox(net);
   int64_t net_hpwl = netBox.dx() + netBox.dy();
@@ -1007,8 +1906,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vecto
     if (iterm->getAvgXY(&x, &y)) {
       Rect iterm_rect(x, y, x, y);
       iterm_box.merge(iterm_rect);
-    }
-    else {
+    } else {
       // This clause is sort of worthless because getAvgXY prints
       // a warning when it fails.
       dbInst *inst = iterm->getInst();
@@ -1030,7 +1928,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vecto
       mirror_x = 2 * cellPtX + cellWidth - iterm_box.xMin() - iterm_box.xMax();
     }
     int delta_x = movesm->movement - cellPtX + mirror_x;
-    
+
     // Considering there wont be any movement along the y axis
     iterm_box.moveDelta(delta_x, 0);
     bool isContain = netBox.contains(iterm_box);
@@ -1061,8 +1959,7 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vecto
         if (iterm_->getAvgXY(&x, &y)) {
           Rect iterm_rect_(x, y, x, y);
           new_net_box.merge(iterm_rect_);
-        }
-        else {
+        } else {
           // This clause is sort of worthless because getAvgXY prints
           // a warning when it fails.
           dbInst *inst = iterm_->getInst();
@@ -1095,8 +1992,8 @@ Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vecto
 }
 
 void
-Opendp::hpwl_increment( dbInst *inst, vector<Move *> moves, 
-                        vector<dbInst *> others, vector<Move *> movess)
+Opendp::hpwl_increment(dbInst *inst, vector<Move *> moves, vector<dbInst *> others,
+                        vector<Move *> movess)
 {
   // get an array of all the nets connects to the cell without duplication using array of pins)
   vector<dbNet *> nets;
@@ -1111,8 +2008,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<Move *> moves,
       vector<dbITerm *> newvector;
       newvector.push_back(iterm);
       iterms.push_back(newvector);
-    }
-    else {
+    } else {
       iterms[i].push_back(iterm);
     }
   }
@@ -1134,8 +2030,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<Move *> moves,
           itermss.push_back(newvector);
         }
         itermss[i].push_back(iterm);
-      }
-      else {
+      } else {
         while (itermss.size() <= i) {
           vector<dbITerm *> newvector;
           itermss.push_back(newvector);
@@ -1164,9 +2059,9 @@ Opendp::hpwl_increment( dbInst *inst, vector<Move *> moves,
 
 // Delta HPWL calculation for multiple cells are moving together
 void
-Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vector<Move *> moves, 
-                        vector<vector<vector<dbITerm *>>> itermss, vector<dbInst *> others, 
-                        vector<Move *> movess, int netCount )
+Opendp::hpwl_increment(dbInst *inst, vector<dbITerm *> iterms, dbNet *net,
+                        vector<Move *> moves, vector<vector<vector<dbITerm *>>> itermss,
+                        vector<dbInst *> others, vector<Move *> movess, int netCount)
 {
   // printf("others size is %d and itermss size is %d\n",others.size(),itermss.size());
   Rect netBox = getBox(net);
@@ -1189,8 +2084,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
     if (iterm->getAvgXY(&x, &y)) {
       Rect iterm_rect(x, y, x, y);
       iterm_box.merge(iterm_rect);
-    }
-    else {
+    } else {
       // This clause is sort of worthless because getAvgXY prints
       // a warning when it fails.
       dbInst *inst = iterm->getInst();
@@ -1212,8 +2106,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
       temp.set_xlo(-10);
       iterm_boxs.push_back(temp);
       continue;
-    }
-    else {
+    } else {
       if (itermss[j][netCount].size() == 0) {
         temp.set_xlo(-10);
         iterm_boxs.push_back(temp);
@@ -1226,8 +2119,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
       if (iterm->getAvgXY(&x, &y)) {
         Rect iterm_rect(x, y, x, y);
         temp.merge(iterm_rect);
-      }
-      else {
+      } else {
         // This clause is sort of worthless because getAvgXY prints
         // a warning when it fails.
         dbInst *inst = iterm->getInst();
@@ -1326,14 +2218,14 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
           if (itermss[j].size() <= netCount) {
             continue;
           }
-          i = std::find(itermss[j][netCount].begin(), itermss[j][netCount].end(), iterm_) - itermss[j][netCount].begin();
+          i = std::find(itermss[j][netCount].begin(), itermss[j][netCount].end(), iterm_) -
+            itermss[j][netCount].begin();
           if (i < itermss[j][netCount].size()) {
             check = true;
             break;
           }
         }
-      }
-      else {
+      } else {
         check = true;
       }
       if (!check) {
@@ -1341,8 +2233,7 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
         if (iterm_->getAvgXY(&x, &y)) {
           Rect iterm_rect_(x, y, x, y);
           new_net_box.merge(iterm_rect_);
-        }
-        else {
+        } else {
           // This clause is sort of worthless because getAvgXY prints
           // a warning when it fails.
           dbInst *inst = iterm_->getInst();
@@ -1383,12 +2274,12 @@ Opendp::hpwl_increment( dbInst *inst, vector<dbITerm *> iterms, dbNet *net, vect
 bool
 Opendp::swapCellss(Cell *cell1, Cell *cell2)
 {
-  if (cell1 != cell2 && !cell1->hold_ && !cell2->hold_ && !isFixed(cell1) && !isFixed(cell2))
-  {
-    if (cell2->x_ > cell1->x_) 
-    {
-      int temp = cell2->x_ + cell2->width_ - cell1->width_ - padLeft(cell1) * site_width_;
-      int grid_x1 = temp/site_width_;
+  if (cell1 != cell2 && !cell1->hold_ && !cell2->hold_ &&
+      !isFixed(cell1) && !isFixed(cell2)) {
+    if (cell2->x_ > cell1->x_) {
+      int temp = cell2->x_ + cell2->width_ - cell1->width_ -
+                  padLeft(cell1) * site_width_;
+      int grid_x1 = temp / site_width_;
       int grid_y1 = gridY(cell2);
       int grid_x2 = gridPaddedX(cell1);
       int grid_y2 = gridY(cell1);
@@ -1396,11 +2287,10 @@ Opendp::swapCellss(Cell *cell1, Cell *cell2)
       erasePixel(cell2);
       paintPixel(cell2, grid_x2, grid_y2);
       paintPixel(cell1, grid_x1, grid_y1);
-    }
-    else 
-    {
-      int temp = cell1->x_ + cell1->width_ - cell2->width_ - padLeft(cell1) * site_width_;
-      int grid_x2 = (temp)/site_width_;
+    } else {
+      int temp = cell1->x_ + cell1->width_ - cell2->width_ -
+                  padLeft(cell1) * site_width_;
+      int grid_x2 = (temp) / site_width_;
       int grid_y2 = gridY(cell1);
       int grid_x1 = gridPaddedX(cell2);
       int grid_y1 = gridY(cell2);
@@ -1415,39 +2305,36 @@ Opendp::swapCellss(Cell *cell1, Cell *cell2)
 }
 
 void
-Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows)
+Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_,
+                  vector<dpRow *> &sortedRows)
 {
-  //sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
-  int cellCount = (int)tmpCells_.size();
-  
+  // sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
+  int cellCount = <int>tmpCells_.size();
+
   int i = 0;
 
   int rowSize = sortedRows.size();
-  //logger_->report("Probelm is in the sort funciton");
-  //sort(sortedRows.begin(), sortedRows.end(), &comparator3);
-  //logger_->report("Probelm is not in the sort funciton");
-  
+  // logger_->report("Probelm is in the sort funciton");
+  // sort(sortedRows.begin(), sortedRows.end(), &comparator3);
+  // logger_->report("Probelm is not in the sort funciton");
+
   vector<Cell *> row;
   int j = 0;
   int db_row_miny = sortedRows[j]->y_;
   int db_row_maxx = sortedRows[j]->x_;
   j++;
-  
+
   i = 0;
   Cell *temp = &tmpCells_[i];
   i++;
-  
+
   // logger_->report("Cell Master name {:s}\n", master->getName());
   // logger_->report("Cell count:{:d} and Row Count:{:d}", cellCount, rowSize);
   while (i <= cellCount && j <= rowSize) {
-    // logger_->report("ROW:{:d} Cell:{:d} ROW Y:{:d} Cell Y:{:d}", j, i, db_row_miny, temp->y_);
     if (db_row_miny != temp->y_ || i == cellCount) {
-      if(db_row_miny == temp->y_ && i == cellCount)
-      {
+      if (db_row_miny == temp->y_ && i == cellCount) {
         row.push_back(temp);
-      }
-      else if(db_row_miny != temp->y_ && i == cellCount)
-      {
+      } else if (db_row_miny != temp->y_ && i == cellCount) {
         row.clear();
         row.push_back(temp);
         all.push_back(row);
@@ -1457,15 +2344,11 @@ Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<d
       vector<Cell *> tmprow;
       int rowLength = row.size();
       int k = 0;
-      //Cell *cell = row[k];
-      // logger_->report("\nRow Cell Count:{:d} Row:{:d}/{:d} Cell:{:d}/{:d}", rowLength,j,rowSize,i,cellCount);
       while (k <= rowLength) {
         if (k < rowLength && row[k]->x_ < db_row_maxx) {
-          // logger_->report("Row:[{:d},{:d}] Y:{:d} X:{:d}, Cell Y:{:d} X:{:d}", j, k, db_row_miny, db_row_maxx, row[k]->y_, row[k]->x_);
           tmprow.push_back(row[k]);
           k++;
-        }
-        else {
+        } else {
           // logger_->report("Row is added in all");
           all.push_back(tmprow);
           tmprow.clear();
@@ -1489,8 +2372,9 @@ Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<d
           j++;
         }
         while (temp->y_ < db_row_miny) {
-          dbMaster* tmpMaster = temp->db_inst_->getMaster();
-          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",tmpMaster->getName());
+          dbMaster *tmpMaster = temp->db_inst_->getMaster();
+          logger_->report("Row Y and Cell Y not Matching: Cell Master Name:{:s}",
+                          tmpMaster->getName());
           temp = &tmpCells_[i];
           i++;
         }
@@ -1504,14 +2388,14 @@ Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<d
     row.push_back(temp);
     temp = &tmpCells_[i];
     i++;
-    //dbMaster *tmpMaster = temp->db_inst_->getMaster();
-    //logger_->report("Row:{:d}/{:d} Cell:{:d}/{:d} Current Row Y:{:d} Cell Y:{:d} Master:{:s} MinRowY:{:d} MaxRowY:{:d} CoreY:{:d}", j,rowSize,i,cellCount,db_row_miny,temp->y_,tmpMaster->getName(),minRowY,maxRowY,core_.yMin());
   }
   while (j == rowSize && i < cellCount) {
     temp = &tmpCells_[i];
     dbMaster *tmpMaster = temp->db_inst_->getMaster();
-    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}", 
-                    tmpMaster->getName(), temp->x_, temp->y_);
+    logger_->report("Cells not able to find any valid row Cell:{:s} X:{:d} Y:{:d}",
+                    tmpMaster->getName(),
+                    temp->x_,
+                    temp->y_);
     i++;
   }
   // logger_->report("Update Row is Finished");
@@ -1520,6 +2404,11 @@ Opendp::updateRow(vector<vector<Cell *>> &all, vector<Cell> &tmpCells_, vector<d
 void
 Opendp::RPATest()
 {
+  // Get def detials
+  // float dbUnit = 1.0*(block_->getDefUnits());
+  // char s1 = '{', s2 = '}';
+  improver(10, 10, 1);
+  return;
   // Initialize opendp
   importDb();
   initGrid();
@@ -1527,86 +2416,59 @@ Opendp::RPATest()
   // Paint fixed cells.
   setFixedGridCells();
 
-  //Get def detials
-  float dbUnit = 1.0*(block_->getDefUnits());
-  
-  // Set to store unique pin layers
-  set<odb::dbTechLayer*> pinLayers;
-  char s1 = '{', s2 = '}';
-  // Below code is used to check if dbTransformation is 
-  // working properly or not for extracted cell pin shapes
-  // Below code is to find the cell pin layers in the block
-  vector<dbMaster*> masterList;
-  block_->getMasters(masterList);
-  for ( dbMaster* master: masterList) {
-    for ( dbMTerm* mterm: master->getMTerms()) {
-      if ( mterm->getSigType().isSupply())
-        continue;
-      for ( dbMPin* mpin: mterm->getMPins()) {
-        odb::dbSet<odb::dbBox> pinShapes = mpin->getGeometry();
-        for (odb::dbBox *pinShape: pinShapes) {
-          odb::dbTechLayer *pinLayer = pinShape->getTechLayer();
-          odb::dbTechLayerType pinLayerType = pinLayer->getType();
-          if ( pinLayerType != odb::dbTechLayerType::Value::ROUTING)
-            continue;
-          pinLayers.insert(pinLayer);
-        }
-      }
-    }
+  auto comparatorLambda2 = [](const CellRPA lhs, const CellRPA rhs) {
+    return lhs.lly_ < rhs.lly_;
+  };
+
+  sort(cellrpas_.begin(), cellrpas_.end(), comparatorLambda2);
+
+  odb::dbSet<dbRow> rows = block_->getRows();
+  vector<dpRow *> sortedRows;
+  int maxRowY = INT_MIN;
+  int minRowY = INT_MAX;
+
+  for (dbRow *row : rows) {
+    Rect rowBox;
+    row->getBBox(rowBox);
+    int y_ = rowBox.yMin();
+    int x_ = rowBox.xMax();
+    x_ -= core_.xMin();
+    y_ -= core_.yMin();
+    if (y_ > maxRowY)
+      maxRowY = y_;
+    if (y_ < minRowY)
+      minRowY = y_;
+    dpRow *tmprow = new dpRow(x_, y_);
+    sortedRows.push_back(tmprow);
   }
 
-  // Get details of the pin layers
-  for (odb::dbTechLayer *pinLayer: pinLayers) {
-    odb::dbTrackGrid *tmpGrid = block_->findTrackGrid(pinLayer);
-    vector<int> xgrid, ygrid;
+  sort(sortedRows.begin(), sortedRows.end(), &comparator3);
+  updateRow(cellrpas_row_, cellrpas_, sortedRows);
 
-    if ( tmpGrid != nullptr) {
-      tmpGrid->getGridX(xgrid);
-      tmpGrid->getGridY(ygrid);
-    }
-
-    int xOffset = xgrid[0], yOffset = ygrid[0], xPitch = xgrid[1] - xgrid[0], 
-      yPitch = ygrid[1] - ygrid[0];
-    string pinLayerName = pinLayer->getName();
-    odb::dbTechLayerDir pinLayerDirection = pinLayer->getDirection();
-    
-    const char *layerDirectoin = pinLayerDirection.getString();
-
-    logger_->report("Pin Layer:{:s} X Offset:{:d} Pitch:{:d}\tY Offset:{:d} Pitch:{:d} Directoin:{:s}",
-    pinLayerName, xOffset, xPitch, yOffset, yPitch, layerDirectoin);
-
-    // Get upper and lower layer details
-    odb::dbTechLayer *upperPinLayer = pinLayer->getUpperLayer();
-    while ( upperPinLayer->getType() != odb::dbTechLayerType::Value::ROUTING) {
-      upperPinLayer = upperPinLayer->getUpperLayer();
-    }
-
-    string upperLayerName = upperPinLayer->getName();
-    logger_->report("Pin Layer:{:s} Upper Layer:{:s}", pinLayerName, upperLayerName);
-  }
-
-  // Here we test GenerateAP
-  
-  GenerateAP();
-  RPAGenerate(340);
-  for (Cell_RPA tmpCell: cell_rpas_) {
-    for ( Pin_RPA tmpPin: tmpCell.pins) {
-      for (AccessPoint tmpAP: tmpPin.xAPs) {
-        float x = tmpAP.x/dbUnit;
-        float y = tmpAP.y/dbUnit;
-         logger_->report("createMarker -bbox {:c}{:f} {:f} {:f} {:f}{:c} -type AP",s1,x,y,x,y,s2);
-      }
+  GenerateAP(420);
+  ComputeRPA(420, cellrpas_row_);
+  /*
+  for ( int i = 0; i < cell_rpas.size(); i++) {
+    for ( int j = 0; j < cell_rpas[i].size(); j++) {
+      string cellName = cell_rpas[i][j]->db_inst_->getName();
+      float x = (cell_rpas[i][j]->llx_)/dbUnit;
+      float y = (cell_rpas[i][j]->lly_)/dbUnit;
+      logger_->report("Cell:{:s} X:{:f} Y:{:f}", cellName, x, y);
     }
   }
-  logger_->report("RPA Testing is done");
-  
-  for ( Cell_RPA tmpCell: cell_rpas_) {
+  */
+
+  for (CellRPA &tmpCell : cellrpas_) {
     string cellName = tmpCell.db_inst_->getName();
     dbMaster *master = tmpCell.db_inst_->getMaster();
     string cellMasterName = master->getName();
-    logger_->report("Cell Name:{:s} Master Name:{:s} RPA Value:{:f}", cellName, cellMasterName, tmpCell.rpa);
-  }
+    logger_->report("Cell:{:s} Master:{:s} IOC:{:f}", cellName, cellMasterName, tmpCell.ioc_);
 
+    for (PinRPA *tmpPin : tmpCell.l2r_) {
+      string pin_name = tmpPin->mterm_->getName();
+      logger_->report("PIN:{:s} RPA:{:f} Boundary:{:d}", pin_name, tmpPin->actual_rpa_value_, tmpPin->is_boundary_);
+    }
+  }
 }
 
 void
@@ -1616,7 +2478,6 @@ Opendp::improver(int swaprange, int shiftrange, int iter)
   initGrid();
   // Paint fixed cells.
   setFixedGridCells();
-
   double hpwl_actual = hpwl();
   // SwapAndShift(40,5);
   std::chrono::time_point<std::chrono::system_clock> start, end;
@@ -1626,8 +2487,8 @@ Opendp::improver(int swaprange, int shiftrange, int iter)
   // swap();
   vector<Cell> tmpCells_(cells_);
   sort(tmpCells_.begin(), tmpCells_.end(), &comparator1);
-  
-  map<int,int> id2index;
+
+  map<int, int> id2index;
 
   odb::dbSet<dbRow> rows = block_->getRows();
   vector<dpRow *> sortedRows;
@@ -1649,27 +2510,38 @@ Opendp::improver(int swaprange, int shiftrange, int iter)
   }
   sort(sortedRows.begin(), sortedRows.end(), &comparator3);
 
-  // for (auto tmpCell: tmpCells_) {
-  // logger_->report("Cell ID: {:d} Name: {:s}", tmpCell.db_inst_->getId(), tmpCell.db_inst_->getName());
-  // }
+  auto comparatorLambda2 = [](const CellRPA lhs, const CellRPA rhs) {
+    return lhs.lly_ < rhs.lly_;
+  };
+
+  dint_ = site_width_ * 3;
+  sort(cellrpas_.begin(), cellrpas_.end(), comparatorLambda2);
+  updateRow(cellrpas_row_, cellrpas_, sortedRows);
+  logger_->report("Started Access point generation");
+  GenerateAP(dint_);
+  logger_->report("Started RPA computation");
+  ComputeRPA(dint_, cellrpas_row_);
   for (int i = 0; i < cells_.size(); i++) {
     id2index[cells_[i].db_inst_->getId()] = i;
   }
 
-  logger_->report("swaprange is {:d} shift range is {:d} and iter is {:d}", swaprange, shiftrange, iter);
+  logger_->report("swaprange is {:d} shift range is {:d} and iter is {:d}",
+                  swaprange, shiftrange, iter);
+
   for (int i = 0; i < iter; i++) {
-    //logger_->report("Starting Swap and Shift");
-    swap(tmpCells_, sortedRows, id2index);
+    // logger_->report("Starting Swap and Shift");
+    // swap(tmpCells_, sortedRows, id2index);
     SwapAndShift(swaprange, shiftrange, tmpCells_, sortedRows, id2index);
-    //logger_->report("Starting only Swap");
+    // logger_->report("Starting only Swap");
   }
+
   double hpwl_final = hpwl();
   end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end - start;
 
   logger_->report("Elapsed time: {:10.1f} s", elapsed_seconds.count());
   logger_->report("HPWL before shift&swap&flip {:10.1f} u", dbuToMicrons(hpwl_actual));
-  //double hpwl_legal = hpwl();
+  // double hpwl_legal = hpwl();
   logger_->report("Final HPWL: {:10.1f} u", dbuToMicrons(hpwl_final));
   double hpwl_delta = (hpwl_actual == 0.0)
       ? 0.0
@@ -1678,15 +2550,16 @@ Opendp::improver(int swaprange, int shiftrange, int iter)
 }
 
 void
-Opendp::swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> &id2index)
+Opendp::swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows,
+              map<int, int> &id2index)
 {
   vector<vector<Cell *>> all;
-  updateRow(all,tmpCells_, sortedRows);
+  updateRow(all, tmpCells_, sortedRows);
   int i = 0;
   int count = 0;
 
   for (i = 0; i < all.size(); i++) {
-    for (int j = 0; j < all[i].size()-1; j++) {
+    for (int j = 0; j < all[i].size() - 1; j++) {
       int cellPtX = 0;
       int cellPtY = 0;
       // position for cell 2
@@ -1701,9 +2574,11 @@ Opendp::swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> 
       onlyFlip.push_back(movv1);
       hpwl_increment(all[i][j]->db_inst_, onlyFlip);
       // flip then swap
-      Move *movv2 = new Move(cellPtXX + all[i][j + 1]->width_ - all[i][j]->width_, 0, true);
+      Move *movv2 =
+        new Move(cellPtXX + all[i][j + 1]->width_ - all[i][j]->width_, 0, true);
       // swap but not flip
-      Move *movv3 = new Move(cellPtXX + all[i][j + 1]->width_ - all[i][j]->width_, 0, false);
+      Move *movv3 =
+        new Move(cellPtXX + all[i][j + 1]->width_ - all[i][j]->width_, 0, false);
 
       moves.push_back(movv2);
       moves.push_back(movv3);
@@ -1743,7 +2618,6 @@ Opendp::swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> 
         }
 
         // update optional info
-
         int displacement = disp(temp);
         displacement_sum_ += displacement;
         if (displacement > displacement_max_) {
@@ -1786,46 +2660,57 @@ Opendp::swap(vector<Cell> &tmpCells_, vector<dpRow *> &sortedRows, map<int,int> 
       }
     }
   }
-  for(i = 0; i < 1; i ++)
-  {
-    for(int j = 0; j < 1; j++)
-    {
+  for (i = 0; i < 1; i++) {
+    for (int j = 0; j < 1; j++) {
       cells_[id2index[all[i][j]->db_inst_->getId()]] = *all[i][j];
     }
   }
 }
 
 void
-Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_, 
-                      vector<dpRow *>& sortedRows, map<int,int> &id2index)
+Opendp::SwapAndShift(int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
+                      vector<dpRow *> &sortedRows, map<int, int> &id2index)
 {
+  int alpha = 150;
   vector<vector<Cell *>> all;
   int i = 0;
-  updateRow(all,tmpCells_, sortedRows);
+  updateRow(all, tmpCells_, sortedRows);
   i = 0;
-  
+
   int count = 0;
   for (i = 0; i < all.size(); i++) {
+    // logger_->report("Print all {:d}",all.size());
     for (int j = 0; j < all[i].size(); j++) {
+      // logger_->report("Print all_i {:d}",all[i].size());
       // hpwl_before = hpwl();
       vector<int> swaps;
       // get all swappable cells
       for (int x = 0; x < all[i].size(); x++) {
         int distance = MaxForSwap * site_width_;
-        if ((all[i][x]->x_ >= (all[i][j]->x_ - distance)) & ((all[i][x]->x_ + all[i][x]->width_) <= (all[i][j]->x_ + all[i][j]->width_ + distance))) {
+        // logger_->report("Distance {:d}", distance);
+        if ((all[i][x]->x_ >= (all[i][j]->x_ - distance)) &
+            ((all[i][x]->x_ + all[i][x]->width_) <=
+            (all[i][j]->x_ + all[i][j]->width_ + distance))) {
+          // logger_->report("first if passed");
           if (checkSwap(j, x, all[i])) {
+            // logger_->report("Check swap succeed");
             swaps.push_back(x);
+          } else {
+            // logger_->report("Check swap failed");
           }
+        } else {
+          // logger_->report("first if not passed");
         }
       }
       // update the move vector with all possible movement
 
-      int delta_track = INT32_MAX;
+      float delta_track = FLT_MAX;
       int cell_track = -1;
       Move *best = new Move();
       vector<Move *> moves;
       vector<dbInst *> other;
       vector<Move *> othermove;
+      // logger_->report("Swap size {:d}",swaps.size());
       for (int k = 0; k < swaps.size(); k++) {
         // for the other cell
         if (j != swaps[k]) {
@@ -1843,7 +2728,11 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
             int cellPtX = 0;
             int cellPtY = 0;
             all[i][swaps[k]]->db_inst_->getLocation(cellPtX, cellPtY);
-            if (((cellPtX + (n * site_width_) - core_.xMin() - padLeft(all[i][swaps[k]]) * site_width_) >= 0) & (all[i][all[i].size() - 1]->x_ + all[i][all[i].size() - 1]->width_ >= all[i][swaps[k]]->x_ + (n * site_width_) + all[i][j]->width_)) {
+            if (((cellPtX + (n * site_width_) - core_.xMin() -
+                padLeft(all[i][swaps[k]]) * site_width_) >= 0) &
+                (all[i][all[i].size() - 1]->x_ +
+                all[i][all[i].size() - 1]->width_ >=
+                all[i][swaps[k]]->x_ + (n * site_width_) + all[i][j]->width_)) {
               Move *movv1 = new Move(cellPtX + (n * site_width_), 0, true);
               // not flip
               Move *movv2 = new Move(cellPtX + (n * site_width_), 0, false);
@@ -1852,11 +2741,18 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
             }
           }
         }
-
+        // logger_->report("Outside if");
         if (j != swaps[k]) {
+          rpaSwapIncrement(i, j, swaps[k], moves, dint_, 0);
+          // rpaSwapIncrement(cellrpas_row_[i], j, swaps[k], moves, dint_);
+          for (int m = 0; m < moves.size(); m++) {
+            int cellPtX = 0;
+            int cellPtY = 0;
+            all[i][swaps[k]]->db_inst_->getLocation(cellPtX, cellPtY);
+            moves[m]->delta *= alpha;
+          }
           hpwl_increment(all[i][j]->db_inst_, moves, other, othermove);
-        }
-        else {
+        } else {
           hpwl_increment(all[i][j]->db_inst_, moves);
         }
 
@@ -1871,7 +2767,6 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
         other.clear();
         othermove.clear();
       }
-
       if (delta_track < 0) {
         Cell *temp = all[i][j];
 
@@ -1881,7 +2776,8 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
 
         if (cell_track != j && cell_track != -1) {
           count++;
-          int grid_x1 = (best->movement - core_.xMin() - padLeft(tempp) * site_width_) / site_width_;
+          int grid_x1 = (best->movement - core_.xMin() -
+                        padLeft(tempp) * site_width_)/site_width_;
           int grid_y1 = gridY(tempp);
           int grid_x2 = gridPaddedX(temp);
           int grid_y2 = gridY(temp);
@@ -1893,14 +2789,16 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
 
           all[i][j] = all[i][cell_track];
           all[i][cell_track] = temp;
-        }
-        else 
-        {
+          CellRPA *swapRPACell = cellrpas_row_[i][j];
+          cellrpas_row_[i][j] = cellrpas_row_[i][cell_track];
+          cellrpas_row_[i][cell_track] = swapRPACell;
+        } else {
           int cellPtXXX = 0;
           int cellPtYYY = 0;
           all[i][j]->db_inst_->getLocation(cellPtXXX, cellPtYYY);
           if ((cell_track != -1) & (best->movement != cellPtXXX)) {
-            int grid_x1 = (best->movement - core_.xMin() - padLeft(temp) * site_width_) / site_width_;
+            int grid_x1 = (best->movement - core_.xMin() -
+                          padLeft(temp) * site_width_) / site_width_;
             int grid_y1 = gridY(temp);
 
             erasePixel(temp);
@@ -1908,9 +2806,9 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
           }
         }
 
-        if (best->flip && cell_track != -1) 
-        {
+        if (best->flip && cell_track != -1) {
           all[i][j]->orient_ = orientMirrorY(orient);
+          cellrpas_row_[i][j]->is_flipped_ = !cellrpas_row_[i][j]->is_flipped_;
         }
         // update optional info
         int displacement = disp(temp);
@@ -1922,16 +2820,24 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
         if (!isFixed(temp)) {
           dbInst *db_inst_ = temp->db_inst_;
           // Only move the instance if necessary to avoid triggering callbacks.
-          if (db_inst_->getOrient() != temp->orient_) {
-            db_inst_->setOrient(temp->orient_);
-            // printf("yeah!\n");
-          }
           int x = core_.xMin() + temp->x_;
           int y = core_.yMin() + temp->y_;
           int inst_x, inst_y;
           db_inst_->getLocation(inst_x, inst_y);
-          if (x != inst_x || y != inst_y)
+
+          if (db_inst_->getOrient() != temp->orient_) {
+            db_inst_->setOrient(temp->orient_);
+            // printf("yeah!\n");
+            if (x == inst_x) {
+              rpaIncrementUpdate(j - 1, j + 1, i, dint_);
+            }
+          }
+
+          if (x != inst_x || y != inst_y) {
             db_inst_->setLocation(x, y);
+            cellrpas_row_[i][j]->llx_ = temp->x_;
+            rpaIncrementUpdate(j - 1, j + 1, i, dint_);
+          }
         }
         if (cell_track != j) {
           displacement = disp(tempp);
@@ -1949,23 +2855,23 @@ Opendp::SwapAndShift( int MaxForSwap, int MaxForMove, vector<Cell> &tmpCells_,
             int y = core_.yMin() + tempp->y_;
             int inst_x, inst_y;
             db_inst_->getLocation(inst_x, inst_y);
-            if (x != inst_x || y != inst_y)
+            if (x != inst_x || y != inst_y) {
               db_inst_->setLocation(x, y);
+              cellrpas_row_[i][cell_track]->llx_ = tempp->x_;
+              rpaIncrementUpdate(cell_track - 1, cell_track + 1, i, dint_);
+            }
           }
           // double hpwl_after = hpwl();
         }
       }
     }
   }
-  for(i = 0; i < 1; i ++)
-  {
-    for(int j = 0; j < 1; j++)
-    {
+  for (i = 0; i < 1; i++) {
+    for (int j = 0; j < 1; j++) {
       cells_[id2index[all[i][j]->db_inst_->getId()]] = *all[i][j];
     }
   }
 }
-
 
 ////////////////////////////////////////////////////////////////
 void
@@ -2027,8 +2933,7 @@ Opendp::getBox(dbNet *net) const
     if (iterm->getAvgXY(&x, &y)) {
       Rect iterm_rect(x, y, x, y);
       net_box.merge(iterm_rect);
-    }
-    else {
+    } else {
       // This clause is sort of worthless because getAvgXY prints
       // a warning when it fails.
       dbInst *inst = iterm->getInst();
